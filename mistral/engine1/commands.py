@@ -266,7 +266,8 @@ class RunTask(EngineCommand):
 
         wf_input = self.task_db.input
 
-        start_params = {'parent_task_id': self.task_db.id}
+        start_params = copy.deepcopy(parent_exec_db.start_params)
+        start_params.update({'parent_task_id': self.task_db.id})
 
         if 'environment' in parent_exec_db.start_params:
             environment = parent_exec_db.start_params['environment']
