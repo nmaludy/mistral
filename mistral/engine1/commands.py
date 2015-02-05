@@ -241,7 +241,9 @@ class RunTask(EngineCommand):
                     self.task_db.id,
                     action_db.action_class,
                     action_db.attributes or {},
-                    utils.merge_dicts(evaluated_input, action_defaults),
+                    utils.merge_dicts(evaluated_input,
+                                      action_defaults,
+                                      overwrite=False),
                     target
                 )
 
@@ -250,7 +252,9 @@ class RunTask(EngineCommand):
                 self.task_db.id,
                 action_db.action_class,
                 action_db.attributes or {},
-                utils.merge_dicts(action_input, action_defaults),
+                utils.merge_dicts(action_input,
+                                  action_defaults,
+                                  overwrite=False),
                 target
             )
 
@@ -273,9 +277,9 @@ class RunTask(EngineCommand):
         start_params = copy.deepcopy(parent_exec_db.start_params)
         start_params.update({'parent_task_id': self.task_db.id})
 
-        if 'environment' in parent_exec_db.start_params:
-            environment = parent_exec_db.start_params['environment']
-            start_params['environment'] = environment
+        if 'env' in parent_exec_db.start_params:
+            environment = parent_exec_db.start_params['env']
+            start_params['env'] = environment
 
         for k, v in wf_input.items():
             if k not in wf_spec.get_input():
