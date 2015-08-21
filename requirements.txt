@@ -1,41 +1,112 @@
-# The order of packages is significant, because pip processes them in the order
-# of appearance. Changing the order has an impact on the overall integration
-# process, which may cause wedges in the gate later.
-alembic>=0.7.2
-argparse
-Babel>=1.3
-croniter>=0.3.4 # MIT License
-eventlet>=0.17.4
-iso8601>=0.1.9
-jsonschema!=2.5.0,<3.0.0,>=2.0.0
-keystonemiddleware>=1.5.0
-kombu>=3.0.7
-mock>=1.0
-networkx>=1.8
-oslo.concurrency>=2.3.0 # Apache-2.0
-oslo.config>=1.11.0 # Apache-2.0
-oslo.db>=1.10.0 # Apache-2.0
-oslo.messaging!=1.12.0,>=1.8.0 # Apache-2.0
-oslo.utils>=1.6.0 # Apache-2.0
-oslo.log>=1.2.0 # Apache-2.0
-oslo.serialization>=1.4.0 # Apache-2.0
-oslo.service>=0.1.0 # Apache-2.0
-paramiko>=1.13.0
-pbr<2.0,>=0.11
-pecan>=0.8.0
-posix-ipc
-python-cinderclient>=1.2.2
-python-glanceclient>=0.18.0
-python-heatclient>=0.3.0
-python-keystoneclient>=1.6.0
-python-neutronclient<3,>=2.3.11
-python-novaclient>=2.22.0
-PyYAML>=3.1.0
-requests>=2.5.2
-retrying>=1.2.3,!=1.3.0 # Apache-2.0
-six>=1.9.0
-SQLAlchemy<1.1.0,>=0.9.7
-stevedore>=1.5.0 # Apache-2.0
-WSME>=0.7
-yaql>=0.2.7,!=0.3.0  # Apache 2.0 License
-tooz>=0.16.0 # Apache-2.0
+Babel==2.0
+Mako==1.0.1
+MarkupSafe==0.23
+PyYAML==3.11
+SQLAlchemy==1.0.8
+Tempita==0.5.2
+WSME==0.7.0
+WebOb==1.4.1
+WebTest==2.0.18
+aioeventlet==0.4
+alembic==0.8.0
+amqp==1.4.6
+anyjson==0.3.3
+argparse==1.2.1
+beautifulsoup4==4.4.0
+cachetools==1.0.3
+cffi==1.2.1
+cliff==1.14.0
+cmd2==0.6.8
+contextlib2==0.4.0
+croniter==0.3.8
+cryptography==1.0
+debtcollector==0.7.0
+decorator==4.0.2
+ecdsa==0.13
+enum34==1.0.4
+eventlet==0.17.4
+extras==0.0.3
+fasteners==0.12.0
+funcsigs==0.4
+functools32==3.2.3-2
+futures==3.0.3
+futurist==0.3.0
+greenlet==0.4.7
+idna==2.0
+ipaddress==1.0.14
+iso8601==0.1.10
+jsonpatch==1.11
+jsonpointer==1.9
+jsonschema==2.5.1
+kazoo==2.2.1
+keystonemiddleware==2.1.0
+kombu==3.0.26
+linecache2==1.0.0
+logutils==0.3.3
+-e git+https://github.com/stackstorm/mistral.git@0eb4fdad31047b80c0728adc14542d2e9ac346d5#egg=mistral-master
+mock==1.3.0
+monotonic==0.3
+msgpack-python==0.4.6
+netaddr==0.7.15
+netifaces==0.10.4
+networkx==1.10
+oslo.concurrency==2.4.0
+oslo.config==2.2.0
+oslo.context==0.5.0
+oslo.db==2.4.1
+oslo.i18n==2.4.0
+oslo.log==1.9.0
+oslo.messaging==2.3.0
+oslo.middleware==2.6.1
+oslo.serialization==1.8.0
+oslo.service==0.7.0
+oslo.utils==2.3.0
+paramiko==1.15.2
+pbr==1.5.0
+pecan==1.0.1
+ply==3.6
+posix-ipc==1.0.0
+prettytable==0.7.2
+psycopg2==2.6.1
+pyOpenSSL==0.15.1
+pyasn1==0.1.8
+pycadf==1.0.0
+pycparser==2.14
+pycrypto==2.6.1
+pyparsing==2.0.3
+python-cinderclient==1.3.1
+python-dateutil==2.4.2
+python-editor==0.3
+python-glanceclient==0.19.0
+python-heatclient==0.6.0
+python-keystoneclient==1.6.0
+python-mimeparse==0.1.4
+-e git+https://github.com/stackstorm/python-mistralclient.git@d2a01c2ac4dd579ddf721783c4f2d168dcde0017#egg=python_mistralclient-master
+python-neutronclient==2.6.0
+python-novaclient==2.26.0
+python-swiftclient==2.5.0
+pytz==2015.4
+requests==2.7.0
+retrying==1.3.3
+simplegeneric==0.8.1
+simplejson==3.8.0
+singledispatch==3.4.0.3
+six==1.9.0
+sqlalchemy-migrate==0.9.7
+sqlparse==0.1.16
+-e git+https://github.com/StackStorm/st2mistral.git@a43c2bd18d67f39a40c1bd20424aa50648d5f862#egg=st2mistral-master
+stevedore==1.7.0
+testresources==0.2.7
+testscenarios==0.5.0
+testtools==1.8.0
+tooz==1.22.0
+traceback2==1.4.0
+trollius==2.0
+unicodecsv==0.13.0
+unittest2==1.1.0
+waitress==0.8.9
+warlock==1.1.0
+wrapt==1.10.5
+wsgiref==0.1.2
+yaql==0.2.7
+zake==0.2.2
