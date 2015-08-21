@@ -43,7 +43,6 @@ keystonemiddleware==2.1.0
 kombu==3.0.26
 linecache2==1.0.0
 logutils==0.3.3
--e git+https://github.com/stackstorm/mistral.git@0eb4fdad31047b80c0728adc14542d2e9ac346d5#egg=mistral-master
 mock==1.3.0
 monotonic==0.3
 msgpack-python==0.4.6
