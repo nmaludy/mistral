@@ -33,4 +33,5 @@ stevedore>=1.0.0  # Apache-2.0
 yaql==0.2.4 # This is not in global requirements
 jsonschema>=2.0.0,<3.0.0
 mock>=1.0, <1.1.1
+pycadf>=1.0.0,<1.1.0
 keystonemiddleware>=1.0.0
