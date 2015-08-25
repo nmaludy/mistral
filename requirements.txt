@@ -92,7 +92,6 @@ singledispatch==3.4.0.3
 six==1.9.0
 sqlalchemy-migrate==0.9.7
 sqlparse==0.1.16
--e git+https://github.com/StackStorm/st2mistral.git@a43c2bd18d67f39a40c1bd20424aa50648d5f862#egg=st2mistral-master
 stevedore==1.7.0
 testresources==0.2.7
 testscenarios==0.5.0
