@@ -80,7 +80,6 @@ python-glanceclient==0.19.0
 python-heatclient==0.6.0
 python-keystoneclient==1.6.0
 python-mimeparse==0.1.4
--e git+https://github.com/stackstorm/python-mistralclient.git@d2a01c2ac4dd579ddf721783c4f2d168dcde0017#egg=python_mistralclient-master
 python-neutronclient==2.6.0
 python-novaclient==2.26.0
 python-swiftclient==2.5.0
