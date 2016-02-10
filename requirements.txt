@@ -29,7 +29,7 @@ dogpile.cache==0.5.7
 dogpile.core==0.4.1
 ecdsa==0.13
 enum34==1.1.2
-eventlet==0.18.1
+eventlet>=0.18,<0.19
 fasteners==0.14.1
 funcsigs==0.4
 functools32==3.2.3-2
