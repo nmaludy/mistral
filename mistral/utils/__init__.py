@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
 # Copyright 2015 - Huawei Technologies Co. Ltd
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -16,20 +15,22 @@
 #    limitations under the License.
 
 import contextlib
+import functools
 import json
 import logging
 import os
 from os import path
 import shutil
-import six
 import socket
+import sys
 import tempfile
 import threading
-import uuid
 
 import eventlet
 from eventlet import corolocal
 from oslo_concurrency import processutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import pkg_resources as pkg
 import random
 
@@ -39,10 +40,16 @@ from mistral import version
 
 # Thread local storage.
 _th_loc_storage = threading.local()
+ACTION_TASK_TYPE = 'ACTION'
+WORKFLOW_TASK_TYPE = 'WORKFLOW'
 
 
 def generate_unicode_uuid():
-    return six.text_type(str(uuid.uuid4()))
+    return uuidutils.generate_uuid()
+
+
+def is_valid_uuid(uuid_string):
+    return uuidutils.is_uuid_like(uuid_string)
 
 
 def _get_greenlet_local_storage():
@@ -73,7 +80,7 @@ def get_thread_local(var_name):
 
 
 def set_thread_local(var_name, val):
-    if not val and has_thread_local(var_name):
+    if val is None and has_thread_local(var_name):
         gl_storage = _get_greenlet_local_storage()
 
         # Delete variable from greenlet local storage.
@@ -84,7 +91,7 @@ def set_thread_local(var_name, val):
         if gl_storage and len(gl_storage) == 0:
             del _th_loc_storage.greenlet_locals[corolocal.get_ident()]
 
-    if val:
+    if val is not None:
         gl_storage = _get_greenlet_local_storage()
         if not gl_storage:
             gl_storage = _th_loc_storage.greenlet_locals[
@@ -100,6 +107,7 @@ def log_exec(logger, level=logging.DEBUG):
     """
 
     def _decorator(func):
+        @functools.wraps(func)
         def _logged(*args, **kw):
             params_repr = ("[args=%s, kw=%s]" % (str(args), str(kw))
                            if args or kw else "")
@@ -133,7 +141,7 @@ def merge_dicts(left, right, overwrite=True):
     if right is None:
         return left
 
-    for k, v in six.iteritems(right):
+    for k, v in right.items():
         if k not in left:
             left[k] = v
         else:
@@ -143,6 +151,25 @@ def merge_dicts(left, right, overwrite=True):
                 merge_dicts(left_v, v, overwrite=overwrite)
             elif overwrite:
                 left[k] = v
+
+    return left
+
+
+def update_dict(left, right):
+    """Updates left dict with content from right dict
+
+    :param left: Left dict.
+    :param right: Right dict.
+    :return: the updated left dictionary.
+    """
+
+    if left is None:
+        return right
+
+    if right is None:
+        return left
+
+    left.update(right)
 
     return left
 
@@ -169,6 +196,16 @@ def cut(data, length=100):
         return string
 
 
+def cut_by_kb(data, kilobytes):
+    if kilobytes <= 0:
+        return cut(data)
+
+    bytes_per_char = sys.getsizeof('s') - sys.getsizeof('')
+    length = int(kilobytes * 1024 / bytes_per_char)
+
+    return cut(data, length)
+
+
 def iter_subclasses(cls, _seen=None):
     """Generator over all subclasses of a given class in depth first order."""
 
@@ -179,7 +216,7 @@ def iter_subclasses(cls, _seen=None):
 
     try:
         subs = cls.__subclasses__()
-    except TypeError:   # fails only when cls is type
+    except TypeError:  # fails only when cls is type
         subs = cls.__subclasses__(cls)
 
     for sub in subs:
@@ -329,3 +366,10 @@ def generate_key_pair(key_length=2048):
         public_key = open(public_key_path).read()
 
         return private_key, public_key
+
+
+def utc_now_sec():
+    """Returns current time and drops microseconds."""
+
+    d = timeutils.utcnow()
+    return d.replace(microsecond=0)

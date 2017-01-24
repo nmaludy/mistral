@@ -13,9 +13,16 @@
 #    limitations under the License.
 
 import mock
-from oslotest import base
 
 from mistral.actions.openstack import actions
+from mistral import config
+from mistral import context as ctx
+from oslotest import base
+
+
+class FakeEndpoint(object):
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
 
 
 class OpenStackActionTest(base.BaseTestCase):
@@ -30,6 +37,122 @@ class OpenStackActionTest(base.BaseTestCase):
 
         self.assertTrue(mocked().servers.get.called)
         mocked().servers.get.assert_called_once_with(server="1234-abcd")
+
+    @mock.patch('mistral.actions.openstack.actions.keystone_utils.get_'
+                'keystone_endpoint_v2')
+    @mock.patch('mistral.actions.openstack.actions.keystone_utils.get_'
+                'endpoint_for_project')
+    @mock.patch('mistral.actions.openstack.actions.novaclient')
+    def test_nova_action_config_endpoint(self, mock_novaclient,
+                                         mock_nova_endpoint,
+                                         mock_ks_endpoint_v2):
+
+        # this is the default, but be explicit
+        config.CONF.set_default('os_actions_endpoint_type', 'public')
+
+        test_ctx = ctx.MistralContext(
+            user_id=None,
+            project_id='1234',
+            project_name='admin',
+            auth_token=None,
+            is_admin=False,
+            # set year to 3016 in order for token to always be valid
+            expires_at='3016-07-13T18:34:22.000000Z',
+            insecure=False
+        )
+        ctx.set_ctx(test_ctx)
+
+        # attributes mirror keystone Endpoint object exactly
+        # (with endpoint type public)
+        keystone_attrs = {
+            'url': 'http://192.0.2.1:5000/v2.0',
+            'enabled': True,
+            'id': 'b1ddf133fa6e491c8ee13701be97db2d',
+            'interface': 'public',
+            'links': {
+                u'self': u'http://192.0.2.1:5000/v3/endpoints/'
+                'b1ddf133fa6e491c8ee13701be97db2d'
+            },
+            'region': 'regionOne',
+            'region_id': 'regionOne',
+            'service_id': '8f4afc75cd584d5cb381f68a9db80147',
+        }
+        keystone_endpoint = FakeEndpoint(**keystone_attrs)
+
+        nova_attrs = {
+            'url': 'http://192.0.2.1:8774/v2/%(tenant_id)s',
+            'enabled': True,
+            'id': '5bb51b33c9984513b52b6a3e85154305',
+            'interface': 'public',
+            'links': {
+                u'self': u'http://192.0.2.1:5000/v3/endpoints/'
+                '5bb51b33c9984513b52b6a3e85154305'
+            },
+            'region': 'regionOne',
+            'region_id': 'regionOne',
+            'service_id': '1af46173f37848edb65bd4962ed2d09d',
+        }
+        nova_endpoint = FakeEndpoint(**nova_attrs)
+
+        mock_ks_endpoint_v2.return_value(keystone_endpoint)
+        mock_nova_endpoint.return_value(nova_endpoint)
+
+        method_name = "servers.get"
+        action_class = actions.NovaAction
+        action_class.client_method_name = method_name
+        params = {'server': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        mock_novaclient.Client.assert_called_once_with(
+            2,
+            username=None,
+            api_key=None,
+            endpoint_type='public',
+            service_type='compute',
+            auth_token=test_ctx.auth_token,
+            tenant_id=test_ctx.project_id,
+            region_name=mock_ks_endpoint_v2().region,
+            auth_url=mock_ks_endpoint_v2().url,
+            insecure=test_ctx.insecure
+        )
+
+        self.assertTrue(mock_novaclient.Client().servers.get.called)
+        mock_novaclient.Client().servers.get.assert_called_once_with(
+            server="1234-abcd")
+
+        # Repeat test in order to validate cache.
+        mock_novaclient.reset_mock()
+        action.run()
+
+        # TODO(d0ugal): Uncomment the following line when caching is fixed.
+        # mock_novaclient.Client.assert_not_called()
+        mock_novaclient.Client().servers.get.assert_called_with(
+            server="1234-abcd")
+
+        # Repeat again with different context for cache testing.
+        test_ctx.project_name = 'service'
+        test_ctx.project_id = '1235'
+        ctx.set_ctx(test_ctx)
+
+        mock_novaclient.reset_mock()
+        action.run()
+        mock_novaclient.Client.assert_called_once_with(
+            2,
+            username=None,
+            api_key=None,
+            endpoint_type='public',
+            service_type='compute',
+            auth_token=test_ctx.auth_token,
+            tenant_id=test_ctx.project_id,
+            region_name=mock_ks_endpoint_v2().region,
+            auth_url=mock_ks_endpoint_v2().url,
+            insecure=test_ctx.insecure
+        )
+
+        self.assertTrue(mock_novaclient.Client().servers.get.called)
+        mock_novaclient.Client().servers.get.assert_called_once_with(
+            server="1234-abcd")
 
     @mock.patch.object(actions.GlanceAction, '_get_client')
     def test_glance_action(self, mocked):
@@ -199,3 +322,81 @@ class OpenStackActionTest(base.BaseTestCase):
 
         self.assertTrue(mocked().domain.get.called)
         mocked().domain.get.assert_called_once_with(domain="example.com")
+
+    @mock.patch.object(actions.MagnumAction, '_get_client')
+    def test_magnum_action(self, mocked):
+        method_name = "baymodels.get"
+        action_class = actions.MagnumAction
+        action_class.client_method_name = method_name
+        params = {'id': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        self.assertTrue(mocked().baymodels.get.called)
+        mocked().baymodels.get.assert_called_once_with(id="1234-abcd")
+
+    @mock.patch.object(actions.MuranoAction, '_get_client')
+    def test_murano_action(self, mocked):
+        method_name = "categories.get"
+        action_class = actions.MuranoAction
+        action_class.client_method_name = method_name
+        params = {'category_id': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        self.assertTrue(mocked().categories.get.called)
+        mocked().categories.get.assert_called_once_with(
+            category_id="1234-abcd"
+        )
+
+    @mock.patch.object(actions.TackerAction, '_get_client')
+    def test_tacker_action(self, mocked):
+        method_name = "show_vim"
+        action_class = actions.TackerAction
+        action_class.client_method_name = method_name
+        params = {'vim_id': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        self.assertTrue(mocked().show_vim.called)
+        mocked().show_vim.assert_called_once_with(
+            vim_id="1234-abcd"
+        )
+
+    @mock.patch.object(actions.SenlinAction, '_get_client')
+    def test_senlin_action(self, mocked):
+        action_class = actions.SenlinAction
+        action_class.client_method_name = "get_cluster"
+        action = action_class(cluster_id='1234-abcd')
+
+        action.run()
+
+        self.assertTrue(mocked().get_cluster.called)
+
+        mocked().get_cluster.assert_called_once_with(
+            cluster_id="1234-abcd"
+        )
+
+    @mock.patch.object(actions.AodhAction, '_get_client')
+    def test_aodh_action(self, mocked):
+        method_name = "alarm.get"
+        action_class = actions.AodhAction
+        action_class.client_method_name = method_name
+        params = {'alarm_id': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        self.assertTrue(mocked().alarm.get.called)
+        mocked().alarm.get.assert_called_once_with(alarm_id="1234-abcd")
+
+    @mock.patch.object(actions.GnocchiAction, '_get_client')
+    def test_gnocchi_action(self, mocked):
+        method_name = "metric.get"
+        action_class = actions.GnocchiAction
+        action_class.client_method_name = method_name
+        params = {'metric_id': '1234-abcd'}
+        action = action_class(**params)
+        action.run()
+
+        self.assertTrue(mocked().metric.get.called)
+        mocked().metric.get.assert_called_once_with(metric_id="1234-abcd")

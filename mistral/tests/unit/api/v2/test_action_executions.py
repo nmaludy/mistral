@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2015 - Mirantis, Inc.
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -19,15 +18,20 @@ import datetime
 import json
 
 import mock
+
 from oslo_config import cfg
+import oslo_messaging
 
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine import rpc
+from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
 from mistral.tests.unit.api import base
 from mistral.workflow import states
 from mistral.workflow import utils as wf_utils
+
+# This line is needed for correct initialization of messaging config.
+oslo_messaging.get_transport(cfg.CONF)
 
 
 ACTION_EX_DB = models.ActionExecution(
@@ -51,6 +55,34 @@ AD_HOC_ACTION_EX_DB = models.ActionExecution(
     id='123',
     state=states.SUCCESS,
     state_info=states.SUCCESS,
+    tags=['foo', 'fee'],
+    name='std.echo',
+    description='something',
+    accepted=True,
+    input={},
+    output={},
+    created_at=datetime.datetime(1970, 1, 1),
+    updated_at=datetime.datetime(1970, 1, 1)
+)
+
+AD_HOC_ACTION_EX_ERROR = models.ActionExecution(
+    id='123',
+    state=states.ERROR,
+    state_info=states.ERROR,
+    tags=['foo', 'fee'],
+    name='std.echo',
+    description='something',
+    accepted=True,
+    input={},
+    output={},
+    created_at=datetime.datetime(1970, 1, 1),
+    updated_at=datetime.datetime(1970, 1, 1)
+)
+
+AD_HOC_ACTION_EX_CANCELLED = models.ActionExecution(
+    id='123',
+    state=states.CANCELLED,
+    state_info=states.CANCELLED,
     tags=['foo', 'fee'],
     name='std.echo',
     description='something',
@@ -99,6 +131,12 @@ UPDATED_ACTION = copy.deepcopy(ACTION_EX)
 UPDATED_ACTION['state'] = 'SUCCESS'
 UPDATED_ACTION_OUTPUT = UPDATED_ACTION['output']
 
+CANCELLED_ACTION_EX_DB = copy.copy(ACTION_EX_DB).to_dict()
+CANCELLED_ACTION_EX_DB['state'] = 'CANCELLED'
+CANCELLED_ACTION_EX_DB['task_name'] = 'task1'
+CANCELLED_ACTION = copy.deepcopy(ACTION_EX)
+CANCELLED_ACTION['state'] = 'CANCELLED'
+
 ERROR_ACTION_EX = copy.copy(ACTION_EX_DB).to_dict()
 ERROR_ACTION_EX['state'] = 'ERROR'
 ERROR_ACTION_EX['task_name'] = 'task1'
@@ -139,13 +177,22 @@ MOCK_ACTION = mock.MagicMock(return_value=ACTION_EX_DB)
 MOCK_ACTION_NOT_COMPLETE = mock.MagicMock(
     return_value=ACTION_EX_DB_NOT_COMPLETE
 )
+
+MOCK_ACTION_COMPLETE_ERROR = mock.MagicMock(
+    return_value=AD_HOC_ACTION_EX_ERROR
+)
+MOCK_ACTION_COMPLETE_CANCELLED = mock.MagicMock(
+    return_value=AD_HOC_ACTION_EX_CANCELLED
+)
+
 MOCK_AD_HOC_ACTION = mock.MagicMock(return_value=AD_HOC_ACTION_EX_DB)
 MOCK_ACTIONS = mock.MagicMock(return_value=[ACTION_EX_DB])
 MOCK_EMPTY = mock.MagicMock(return_value=[])
-MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundException())
+MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 MOCK_DELETE = mock.MagicMock(return_value=None)
 
 
+@mock.patch.object(rpc, '_IMPL_CLIENT', mock.Mock())
 class TestActionExecutionsController(base.APITest):
     def setUp(self):
         super(TestActionExecutionsController, self).setUp()
@@ -164,6 +211,10 @@ class TestActionExecutionsController(base.APITest):
         self.assertEqual(200, resp.status_int)
         self.assertDictEqual(ACTION_EX, resp.json)
 
+    def test_basic_get(self):
+        resp = self.app.get('/v2/action_executions/')
+        self.assertEqual(200, resp.status_int)
+
     @mock.patch.object(db_api, 'get_action_execution', MOCK_NOT_FOUND)
     def test_get_not_found(self):
         resp = self.app.get('/v2/action_executions/123', expect_errors=True)
@@ -179,20 +230,48 @@ class TestActionExecutionsController(base.APITest):
             {
                 'name': 'std.echo',
                 'input': "{}",
+                'params': '{"save_result": true, "run_sync": true}'
+            }
+        )
+
+        self.assertEqual(201, resp.status_int)
+
+        action_exec = copy.deepcopy(ACTION_EX)
+        del action_exec['task_name']
+
+        self.assertDictEqual(action_exec, resp.json)
+
+        f.assert_called_once_with(
+            action_exec['name'],
+            json.loads(action_exec['input']),
+            description=None,
+            save_result=True,
+            run_sync=True
+        )
+
+    @mock.patch.object(rpc.EngineClient, 'start_action')
+    def test_post_json(self, f):
+        f.return_value = ACTION_EX_DB.to_dict()
+
+        resp = self.app.post_json(
+            '/v2/action_executions',
+            {
+                'name': 'std.echo',
+                'input': {},
                 'params': '{"save_result": true}'
             }
         )
 
         self.assertEqual(201, resp.status_int)
 
-        action_exec = ACTION_EX
+        action_exec = copy.deepcopy(ACTION_EX)
         del action_exec['task_name']
 
-        self.assertDictEqual(ACTION_EX, resp.json)
+        self.assertDictEqual(action_exec, resp.json)
 
         f.assert_called_once_with(
-            ACTION_EX['name'],
-            json.loads(ACTION_EX['input']),
+            action_exec['name'],
+            json.loads(action_exec['input']),
             description=None,
             save_result=True
         )
@@ -225,6 +304,15 @@ class TestActionExecutionsController(base.APITest):
         resp = self.app.post_json(
             '/v2/action_executions',
             {'input': None},
+            expect_errors=True
+        )
+
+        self.assertEqual(400, resp.status_int)
+
+    def test_post_bad_json_input(self):
+        resp = self.app.post_json(
+            '/v2/action_executions',
+            {'input': 2},
             expect_errors=True
         )
 
@@ -290,6 +378,20 @@ class TestActionExecutionsController(base.APITest):
             wf_utils.Result(error=DEFAULT_ERROR_OUTPUT)
         )
 
+    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    def test_put_cancelled(self, on_action_complete_mock_func):
+        on_action_complete_mock_func.return_value = CANCELLED_ACTION_EX_DB
+
+        resp = self.app.put_json('/v2/action_executions/123', CANCELLED_ACTION)
+
+        self.assertEqual(200, resp.status_int)
+        self.assertDictEqual(CANCELLED_ACTION, resp.json)
+
+        on_action_complete_mock_func.assert_called_once_with(
+            CANCELLED_ACTION['id'],
+            wf_utils.Result(cancel=True)
+        )
+
     @mock.patch.object(
         rpc.EngineClient,
         'on_action_complete',
@@ -303,6 +405,19 @@ class TestActionExecutionsController(base.APITest):
         )
 
         self.assertEqual(404, resp.status_int)
+
+    def test_put_bad_state(self):
+        action = copy.deepcopy(ACTION_EX)
+        action['state'] = 'PAUSED'
+
+        resp = self.app.put_json(
+            '/v2/action_executions/123',
+            action,
+            expect_errors=True
+        )
+
+        self.assertEqual(400, resp.status_int)
+        self.assertIn('Expected one of', resp.json['faultstring'])
 
     def test_put_bad_result(self):
         resp = self.app.put_json(
@@ -394,3 +509,29 @@ class TestActionExecutionsController(base.APITest):
             "Only completed action execution can be deleted",
             resp.body.decode()
         )
+
+    @mock.patch.object(
+        db_api,
+        'get_action_execution',
+        MOCK_ACTION_COMPLETE_ERROR
+    )
+    @mock.patch.object(db_api, 'delete_action_execution', MOCK_DELETE)
+    def test_delete_action_exeuction_complete_error(self):
+        cfg.CONF.set_default('allow_action_execution_deletion', True, 'api')
+
+        resp = self.app.delete('/v2/action_executions/123', expect_errors=True)
+
+        self.assertEqual(204, resp.status_int)
+
+    @mock.patch.object(
+        db_api,
+        'get_action_execution',
+        MOCK_ACTION_COMPLETE_CANCELLED
+    )
+    @mock.patch.object(db_api, 'delete_action_execution', MOCK_DELETE)
+    def test_delete_action_exeuction_complete_cancelled(self):
+        cfg.CONF.set_default('allow_action_execution_deletion', True, 'api')
+
+        resp = self.app.delete('/v2/action_executions/123', expect_errors=True)
+
+        self.assertEqual(204, resp.status_int)

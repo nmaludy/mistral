@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2014 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,15 +54,23 @@ class Engine(object):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def on_action_complete(self, action_ex_id, result):
+    def on_action_complete(self, action_ex_id, result, wf_action=False,
+                           async=False):
         """Accepts action result and continues the workflow.
 
         Action execution result here is a result which comes from an
         action/workflow associated which the task.
+
         :param action_ex_id: Action execution id.
         :param result: Action/workflow result. Instance of
             mistral.workflow.base.Result
-        :return:
+        :param wf_action: If True it means that the given id points to
+            a workflow execution rather than action execution. It happens
+            when a nested workflow execution sends its result to a parent
+            workflow.
+        :param async: If True, run action in asynchronous mode (w/o waiting
+            for completion).
+        :return: Action(or workflow if wf_action=True) execution object.
         """
         raise NotImplementedError
 
@@ -78,19 +84,19 @@ class Engine(object):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def resume_workflow(self, wf_ex_id):
+    def resume_workflow(self, wf_ex_id, env=None):
         """Resumes workflow.
 
         :param wf_ex_id: Execution id.
+        :param env: Workflow environment.
         :return: Workflow execution object.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
-    def rerun_workflow(self, wf_ex_id, task_ex_id, reset=True, env=None):
+    def rerun_workflow(self, task_ex_id, reset=True, env=None):
         """Rerun workflow from the specified task.
 
-        :param wf_ex_id: Workflow execution id.
         :param task_ex_id: Task execution id.
         :param reset: If True, reset task state including deleting its action
             executions.
@@ -128,14 +134,30 @@ class Executor(object):
 
     @abc.abstractmethod
     def run_action(self, action_ex_id, action_class_str, attributes,
-                   action_params):
+                   action_params, safe_rerun, redelivered=False):
         """Runs action.
 
         :param action_ex_id: Corresponding action execution id.
         :param action_class_str: Path to action class in dot notation.
         :param attributes: Attributes of action class which will be set to.
         :param action_params: Action parameters.
+        :param safe_rerun: Tells if given action can be safely rerun.
+        :param redelivered: Tells if given action was run before on another
+            executor.
         """
+        raise NotImplementedError()
+
+
+@six.add_metaclass(abc.ABCMeta)
+class EventEngine(object):
+    """Action event trigger interface."""
+
+    @abc.abstractmethod
+    def create_event_trigger(self, trigger, events):
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def delete_event_trigger(self, trigger, events):
         raise NotImplementedError()
 
 
@@ -155,8 +177,15 @@ class TaskPolicy(object):
         :param task_ex: DB model for task that is about to start.
         :param task_spec: Task specification.
         """
-        # No-op by default.
-        data_flow.evaluate_object_fields(self, task_ex.in_context)
+        wf_ex = task_ex.workflow_execution
+
+        ctx_view = data_flow.ContextView(
+            task_ex.in_context,
+            wf_ex.context,
+            wf_ex.input
+        )
+
+        data_flow.evaluate_object_fields(self, ctx_view)
 
         self._validate()
 
@@ -166,8 +195,15 @@ class TaskPolicy(object):
         :param task_ex: Completed task DB model.
         :param task_spec: Completed task specification.
         """
-        # No-op by default.
-        data_flow.evaluate_object_fields(self, task_ex.in_context)
+        wf_ex = task_ex.workflow_execution
+
+        ctx_view = data_flow.ContextView(
+            task_ex.in_context,
+            wf_ex.context,
+            wf_ex.input
+        )
+
+        data_flow.evaluate_object_fields(self, ctx_view)
 
         self._validate()
 

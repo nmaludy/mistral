@@ -1,6 +1,7 @@
 # Copyright 2013 - Mirantis, Inc.
 # Copyright 2015 - StackStorm, Inc.
 # Copyright 2015 Huawei Technologies Co., Ltd.
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -17,18 +18,27 @@
 import copy
 import datetime
 import json
+
 import mock
-import uuid
+from oslo_config import cfg
+import oslo_messaging
 from webtest import app as webtest_app
 
+from mistral.api.controllers.v2 import execution
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import api as sql_db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine import rpc
+from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
 from mistral.tests.unit.api import base
 from mistral import utils
+from mistral.utils import rest_utils
 from mistral.workflow import states
+from oslo_utils import uuidutils
+
+# This line is needed for correct initialization of messaging config.
+oslo_messaging.get_transport(cfg.CONF)
+
 
 WF_EX = models.WorkflowExecution(
     id='123e4567-e89b-12d3-a456-426655440000',
@@ -59,7 +69,7 @@ WF_EX_JSON = {
 }
 
 SUB_WF_EX = models.WorkflowExecution(
-    id=str(uuid.uuid4()),
+    id=uuidutils.generate_uuid(),
     workflow_name='some',
     workflow_id='123e4567-e89b-12d3-a456-426655441111',
     description='foobar',
@@ -71,14 +81,13 @@ SUB_WF_EX = models.WorkflowExecution(
     params={'env': {'k1': 'abc'}},
     created_at=datetime.datetime(1970, 1, 1),
     updated_at=datetime.datetime(1970, 1, 1),
-    task_execution_id=str(uuid.uuid4())
+    task_execution_id=uuidutils.generate_uuid()
 )
 
 SUB_WF_EX_JSON = {
     'id': SUB_WF_EX.id,
     'workflow_name': 'some',
     'workflow_id': '123e4567-e89b-12d3-a456-426655441111',
-    'description': 'foobar',
     'input': '{"foo": "bar"}',
     'output': '{}',
     'params': '{"env": {"k1": "abc"}}',
@@ -88,6 +97,12 @@ SUB_WF_EX_JSON = {
     'updated_at': '1970-01-01 00:00:00',
     'task_execution_id': SUB_WF_EX.task_execution_id
 }
+
+MOCK_SUB_WF_EXECUTIONS = mock.MagicMock(return_value=[SUB_WF_EX])
+
+SUB_WF_EX_JSON_WITH_DESC = copy.deepcopy(SUB_WF_EX_JSON)
+SUB_WF_EX_JSON_WITH_DESC['description'] = SUB_WF_EX.description
+
 
 UPDATED_WF_EX = copy.deepcopy(WF_EX)
 UPDATED_WF_EX['state'] = states.PAUSED
@@ -103,7 +118,7 @@ UPDATED_WF_EX_ENV_DESC['description'] = 'foobar'
 UPDATED_WF_EX_ENV_DESC['params'] = {'env': {'k1': 'def'}}
 
 WF_EX_JSON_WITH_DESC = copy.deepcopy(WF_EX_JSON)
-WF_EX_JSON_WITH_DESC['description'] = "execution description."
+WF_EX_JSON_WITH_DESC['description'] = WF_EX.description
 
 MOCK_WF_EX = mock.MagicMock(return_value=WF_EX)
 MOCK_SUB_WF_EX = mock.MagicMock(return_value=SUB_WF_EX)
@@ -111,16 +126,15 @@ MOCK_WF_EXECUTIONS = mock.MagicMock(return_value=[WF_EX])
 MOCK_UPDATED_WF_EX = mock.MagicMock(return_value=UPDATED_WF_EX)
 MOCK_DELETE = mock.MagicMock(return_value=None)
 MOCK_EMPTY = mock.MagicMock(return_value=[])
-MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundException())
+MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 MOCK_ACTION_EXC = mock.MagicMock(side_effect=exc.ActionException())
 
 
+@mock.patch.object(rpc, '_IMPL_CLIENT', mock.Mock())
 class TestExecutionsController(base.APITest):
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
     def test_get(self):
         resp = self.app.get('/v2/executions/123')
-
-        self.maxDiff = None
 
         self.assertEqual(200, resp.status_int)
         self.assertDictEqual(WF_EX_JSON_WITH_DESC, resp.json)
@@ -129,10 +143,8 @@ class TestExecutionsController(base.APITest):
     def test_get_sub_wf_ex(self):
         resp = self.app.get('/v2/executions/123')
 
-        self.maxDiff = None
-
         self.assertEqual(200, resp.status_int)
-        self.assertDictEqual(SUB_WF_EX_JSON, resp.json)
+        self.assertDictEqual(SUB_WF_EX_JSON_WITH_DESC, resp.json)
 
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_NOT_FOUND)
     def test_get_not_found(self):
@@ -197,6 +209,39 @@ class TestExecutionsController(base.APITest):
         'ensure_workflow_execution_exists',
         mock.MagicMock(return_value=None)
     )
+    @mock.patch.object(rpc.EngineClient, 'stop_workflow')
+    def test_put_state_cancelled(self, mock_stop_wf):
+        update_exec = {
+            'id': WF_EX['id'],
+            'state': states.CANCELLED,
+            'state_info': 'Cancelled by user.'
+        }
+
+        wf_ex = copy.deepcopy(WF_EX)
+        wf_ex['state'] = states.CANCELLED
+        wf_ex['state_info'] = 'Cancelled by user.'
+        mock_stop_wf.return_value = wf_ex
+
+        resp = self.app.put_json('/v2/executions/123', update_exec)
+
+        expected_exec = copy.deepcopy(WF_EX_JSON_WITH_DESC)
+        expected_exec['state'] = states.CANCELLED
+        expected_exec['state_info'] = 'Cancelled by user.'
+
+        self.assertEqual(200, resp.status_int)
+        self.assertDictEqual(expected_exec, resp.json)
+
+        mock_stop_wf.assert_called_once_with(
+            '123',
+            'CANCELLED',
+            'Cancelled by user.'
+        )
+
+    @mock.patch.object(
+        db_api,
+        'ensure_workflow_execution_exists',
+        mock.MagicMock(return_value=None)
+    )
     @mock.patch.object(rpc.EngineClient, 'resume_workflow')
     def test_put_state_resume(self, mock_resume_wf):
         update_exec = {
@@ -218,6 +263,33 @@ class TestExecutionsController(base.APITest):
         self.assertEqual(200, resp.status_int)
         self.assertDictEqual(expected_exec, resp.json)
         mock_resume_wf.assert_called_once_with('123', env=None)
+
+    @mock.patch.object(
+        db_api,
+        'ensure_workflow_execution_exists',
+        mock.MagicMock(return_value=None)
+    )
+    def test_put_invalid_state(self):
+        invalid_states = [states.IDLE, states.WAITING, states.RUNNING_DELAYED]
+
+        for state in invalid_states:
+            update_exec = {
+                'id': WF_EX['id'],
+                'state': state
+            }
+
+            resp = self.app.put_json(
+                '/v2/executions/123',
+                update_exec,
+                expect_errors=True
+            )
+
+            self.assertEqual(400, resp.status_int)
+
+            self.assertIn(
+                'Cannot change state to %s.' % state,
+                resp.json['faultstring']
+            )
 
     @mock.patch.object(
         db_api,
@@ -516,3 +588,45 @@ class TestExecutionsController(base.APITest):
         self.assertEqual(400, resp.status_int)
 
         self.assertIn("Unknown sort direction", resp.body.decode())
+
+    @mock.patch.object(
+        db_api,
+        'get_workflow_executions',
+        MOCK_SUB_WF_EXECUTIONS
+    )
+    def test_get_task_workflow_executions(self):
+        resp = self.app.get(
+            '/v2/tasks/%s/workflow_executions' % SUB_WF_EX.task_execution_id
+        )
+
+        self.assertEqual(200, resp.status_int)
+
+        self.assertEqual(1, len(resp.json['executions']))
+        self.assertDictEqual(
+            SUB_WF_EX_JSON_WITH_DESC,
+            resp.json['executions'][0]
+        )
+
+    @mock.patch.object(db_api, 'get_workflow_executions', MOCK_WF_EXECUTIONS)
+    @mock.patch.object(rest_utils, 'get_all')
+    def test_get_all_executions_with_output(self, mock_get_all):
+        resp = self.app.get('/v2/executions?include_output=true')
+
+        self.assertEqual(200, resp.status_int)
+
+        args, kwargs = mock_get_all.call_args
+        resource_function = kwargs['resource_function']
+
+        self.assertEqual(execution._get_execution_resource, resource_function)
+
+    @mock.patch.object(db_api, 'get_workflow_executions', MOCK_WF_EXECUTIONS)
+    @mock.patch.object(rest_utils, 'get_all')
+    def test_get_all_executions_without_output(self, mock_get_all):
+        resp = self.app.get('/v2/executions')
+
+        self.assertEqual(200, resp.status_int)
+
+        args, kwargs = mock_get_all.call_args
+        resource_function = kwargs['resource_function']
+
+        self.assertIsNone(resource_function)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,6 +12,7 @@
 # limitations under the License.
 
 import os
+import subprocess
 import sys
 
 
@@ -94,6 +94,14 @@ htmlhelp_basename = '%sdoc' % project
 # A list of ignored prefixes for module index sorting.
 modindex_common_prefix = ['mistral.']
 
+# If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
+# using the given strftime format.
+# html_last_updated_fmt = '%b %d, %Y'
+git_cmd = ["git", "log", "--pretty=format:'%ad, commit %h'", "--date=local",
+           "-n1"]
+html_last_updated_fmt = subprocess.Popen(
+    git_cmd, stdout=subprocess.PIPE).communicate()[0]
+
 # The name for this set of Sphinx documents. If None, it defaults to
 # "<project> v<release> documentation".
 html_title = 'Mistral'
@@ -101,7 +109,8 @@ html_title = 'Mistral'
 # Custom sidebar templates, maps document names to template names.
 html_sidebars = {
     'index': [
-        'sidebarlinks.html', 'localtoc.html', 'searchbox.html', 'sourcelink.html'
+        'sidebarlinks.html', 'localtoc.html', 'searchbox.html',
+        'sourcelink.html'
     ],
     '**': [
         'localtoc.html', 'relations.html',

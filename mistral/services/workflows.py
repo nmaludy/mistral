@@ -86,8 +86,9 @@ def update_workflows(definition, scope='private', identifier=None):
 
     if identifier and len(wfs) > 1:
         raise exc.InputException(
-            "More than one workflows are not supported for update with UUID "
-            "provided."
+            "More than one workflows are not supported for "
+            "update with identifier. [identifier: %s]" %
+            identifier
         )
 
     db_wfs = []
@@ -111,10 +112,11 @@ def update_workflow_execution_env(wf_ex, env):
     if wf_ex.state not in [states.IDLE, states.PAUSED, states.ERROR]:
         raise exc.NotAllowedException(
             'Updating env to workflow execution is only permitted if '
-            'it is in idle, paused, or re-runnable state.'
+            'it is in IDLE, PAUSED, or ERROR state.'
         )
 
     wf_ex.params['env'] = utils.merge_dicts(wf_ex.params['env'], env)
+
     data_flow.add_environment_to_context(wf_ex)
 
     return wf_ex

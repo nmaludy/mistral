@@ -1,5 +1,5 @@
-#
 # Copyright 2013 - Mirantis, Inc.
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -13,20 +13,23 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import eventlet
+import base64
+
 from keystoneclient.v3 import client as keystone_client
+import logging
 from oslo_config import cfg
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
+from osprofiler import profiler
 import pecan
 from pecan import hooks
 
+from mistral import auth
 from mistral import exceptions as exc
 from mistral import utils
 
-
+LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
-
 _CTX_THREAD_LOCAL_NAME = "MISTRAL_APP_CTX_THREAD_LOCAL"
 ALLOWED_WITHOUT_AUTH = ['/', '/v2/']
 
@@ -67,15 +70,23 @@ class BaseContext(object):
 class MistralContext(BaseContext):
     # Use set([...]) since set literals are not supported in Python 2.6.
     _elements = set([
+        "auth_uri",
+        "auth_cacert",
+        "insecure",
         "user_id",
         "project_id",
         "auth_token",
         "service_catalog",
         "user_name",
+        "region_name",
         "project_name",
         "roles",
         "is_admin",
         "is_trust_scoped",
+        "redelivered",
+        "expires_at",
+        "trust_id",
+        "is_target",
     ])
 
     def __repr__(self):
@@ -97,37 +108,100 @@ def set_ctx(new_ctx):
     utils.set_thread_local(_CTX_THREAD_LOCAL_NAME, new_ctx)
 
 
-def _wrapper(context, thread_desc, thread_group, func, *args, **kwargs):
-    try:
-        set_ctx(context)
-        func(*args, **kwargs)
-    except Exception as e:
-        if thread_group and not thread_group.exc:
-            thread_group.exc = e
-            thread_group.failed_thread = thread_desc
-    finally:
-        if thread_group:
-            thread_group._on_thread_exit()
+def context_from_headers_and_env(headers, env):
+    params = _extract_auth_params_from_headers(headers)
 
-        set_ctx(None)
+    auth_cacert = params['auth_cacert']
+    insecure = params['insecure']
+    auth_token = params['auth_token']
+    auth_uri = params['auth_uri']
+    project_id = params['project_id']
+    region_name = params['region_name']
+    user_id = params['user_id']
+    user_name = params['user_name']
+    is_target = params['is_target']
 
+    token_info = env.get('keystone.token_info', {})
 
-def spawn(thread_description, func, *args, **kwargs):
-    eventlet.spawn(_wrapper, ctx().clone(), thread_description,
-                   None, func, *args, **kwargs)
+    service_catalog = (params['service_catalog'] if is_target
+                       else token_info.get('token', {}))
 
+    roles = headers.get('X-Roles', "").split(",")
+    is_admin = True if 'admin' in roles else False
 
-def context_from_headers(headers):
     return MistralContext(
-        user_id=headers.get('X-User-Id'),
-        project_id=headers.get('X-Project-Id'),
-        auth_token=headers.get('X-Auth-Token'),
-        service_catalog=headers.get('X-Service-Catalog'),
-        user_name=headers.get('X-User-Name'),
+        auth_uri=auth_uri,
+        auth_cacert=auth_cacert,
+        insecure=insecure,
+        user_id=user_id,
+        project_id=project_id,
+        auth_token=auth_token,
+        is_target=is_target,
+        service_catalog=service_catalog,
+        user_name=user_name,
+        region_name=region_name,
         project_name=headers.get('X-Project-Name'),
-        roles=headers.get('X-Roles', "").split(","),
+        roles=roles,
         is_trust_scoped=False,
+        expires_at=token_info['token']['expires_at'] if token_info else None,
+        is_admin=is_admin
     )
+
+
+def _extract_auth_params_from_headers(headers):
+    service_catalog = None
+
+    if headers.get("X-Target-Auth-Uri"):
+        params = {
+            # TODO(akovi): Target cert not handled yet
+            'auth_cacert': None,
+            'insecure': headers.get('X-Target-Insecure', False),
+            'auth_token': headers.get('X-Target-Auth-Token'),
+            'auth_uri': headers.get('X-Target-Auth-Uri'),
+            'project_id': headers.get('X-Target-Project-Id'),
+            'user_id': headers.get('X-Target-User-Id'),
+            'user_name': headers.get('X-Target-User-Name'),
+            'region_name': headers.get('X-Target-Region-Name'),
+            'is_target': True
+        }
+        if not params['auth_token']:
+            raise (exc.MistralException(
+                'Target auth URI (X-Target-Auth-Uri) target auth token '
+                '(X-Target-Auth-Token) must be present'))
+
+        # It's possible that target service catalog is not provided, in this
+        # case, Mistral needs to get target service catalog dynamically when
+        # talking to target openstack deployment later on.
+        service_catalog = _extract_service_catalog_from_headers(
+            headers
+        )
+    else:
+        params = {
+            'auth_cacert': CONF.keystone_authtoken.cafile,
+            'insecure': False,
+            'auth_token': headers.get('X-Auth-Token'),
+            'auth_uri': CONF.keystone_authtoken.auth_uri,
+            'project_id': headers.get('X-Project-Id'),
+            'user_id': headers.get('X-User-Id'),
+            'user_name': headers.get('X-User-Name'),
+            'region_name': headers.get('X-Region-Name'),
+            'is_target': False
+        }
+
+    params['service_catalog'] = service_catalog
+
+    return params
+
+
+def _extract_service_catalog_from_headers(headers):
+    target_service_catalog_header = headers.get(
+        'X-Target-Service-Catalog')
+    if target_service_catalog_header:
+        decoded_catalog = base64.b64decode(
+            target_service_catalog_header).decode()
+        return jsonutils.loads(decoded_catalog)
+    else:
+        return None
 
 
 def context_from_config():
@@ -174,9 +248,25 @@ class RpcContextSerializer(messaging.Serializer):
         return self._base.deserialize_entity(context, entity)
 
     def serialize_context(self, context):
-        return context.to_dict()
+        ctx = context.to_dict()
+
+        pfr = profiler.get()
+
+        if pfr:
+            ctx['trace_info'] = {
+                "hmac_key": pfr.hmac_key,
+                "base_id": pfr.get_base_id(),
+                "parent_id": pfr.get_id()
+            }
+
+        return ctx
 
     def deserialize_context(self, context):
+        trace_info = context.pop('trace_info', None)
+
+        if trace_info:
+            profiler.init(**trace_info)
+
         ctx = MistralContext(**context)
         set_ctx(ctx)
 
@@ -188,24 +278,14 @@ class AuthHook(hooks.PecanHook):
         if state.request.path in ALLOWED_WITHOUT_AUTH:
             return
 
-        if CONF.pecan.auth_enable:
-            # Note(nmakhotkin): Since we have deferred authentication,
-            # need to check for auth manually (check for corresponding
-            # headers according to keystonemiddleware docs.
-            identity_status = state.request.headers.get('X-Identity-Status')
-            service_identity_status = state.request.headers.get(
-                'X-Service-Identity-Status'
-            )
+        if not CONF.pecan.auth_enable:
+            return
 
-            if (identity_status == 'Confirmed'
-                    or service_identity_status == 'Confirmed'):
-                return
-
-            if state.request.headers.get('X-Auth-Token'):
-                msg = ("Auth token is invalid: %s"
-                       % state.request.headers['X-Auth-Token'])
-            else:
-                msg = 'Authentication required'
+        try:
+            auth_handler = auth.get_auth_handler()
+            auth_handler.authenticate(state.request)
+        except Exception as e:
+            msg = "Failed to validate access token: %s" % str(e)
 
             pecan.abort(
                 status_code=401,
@@ -216,7 +296,10 @@ class AuthHook(hooks.PecanHook):
 
 class ContextHook(hooks.PecanHook):
     def before(self, state):
-        set_ctx(context_from_headers(state.request.headers))
+        set_ctx(context_from_headers_and_env(
+            state.request.headers,
+            state.request.environ
+        ))
 
     def after(self, state):
         set_ctx(None)

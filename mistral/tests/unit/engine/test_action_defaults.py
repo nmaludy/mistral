@@ -107,12 +107,13 @@ class ActionDefaultTest(base.EngineTestCase):
 
         wf_ex = self.engine.start_workflow('wf1', None, env=ENV)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(states.SUCCESS, wf_ex.state)
-        self._assert_single_item(wf_ex.task_executions, name='task1')
+            self.assertEqual(states.SUCCESS, wf_ex.state)
+            self._assert_single_item(wf_ex.task_executions, name='task1')
 
         requests.request.assert_called_with(
             'GET', 'https://api.library.org/books',
@@ -132,12 +133,13 @@ class ActionDefaultTest(base.EngineTestCase):
 
         wf_ex = self.engine.start_workflow('wf2', None, env=ENV)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(states.SUCCESS, wf_ex.state)
-        self._assert_single_item(wf_ex.task_executions, name='task1')
+            self.assertEqual(states.SUCCESS, wf_ex.state)
+            self._assert_single_item(wf_ex.task_executions, name='task1')
 
         requests.request.assert_called_with(
             'GET', 'https://api.library.org/books',
@@ -169,19 +171,20 @@ class ActionDefaultTest(base.EngineTestCase):
             env=ENV
         )
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(states.SUCCESS, wf_ex.state)
-        self._assert_single_item(wf_ex.task_executions, name='task1')
+            self.assertEqual(states.SUCCESS, wf_ex.state)
+            self._assert_single_item(wf_ex.task_executions, name='task1')
 
-        calls = [mock.call('GET', url, params=None, data=None,
-                           headers=None, cookies=None,
-                           allow_redirects=None, proxies=None,
-                           auth=EXPECTED_ENV_AUTH, verify=None,
-                           timeout=ENV['__actions']['std.http']['timeout'])
-                 for url in wf_input['links']]
+            calls = [mock.call('GET', url, params=None, data=None,
+                               headers=None, cookies=None,
+                               allow_redirects=None, proxies=None,
+                               auth=EXPECTED_ENV_AUTH, verify=None,
+                               timeout=ENV['__actions']['std.http']['timeout'])
+                     for url in wf_input['links']]
 
         requests.request.assert_has_calls(calls, any_order=True)
 
@@ -207,12 +210,13 @@ class ActionDefaultTest(base.EngineTestCase):
             env=ENV
         )
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(states.SUCCESS, wf_ex.state)
-        self._assert_single_item(wf_ex.task_executions, name='task1')
+            self.assertEqual(states.SUCCESS, wf_ex.state)
+            self._assert_single_item(wf_ex.task_executions, name='task1')
 
         calls = [mock.call('GET', url, params=None, data=None,
                            headers=None, cookies=None,

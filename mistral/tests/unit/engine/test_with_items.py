@@ -13,9 +13,11 @@
 #    limitations under the License.
 
 import copy
+import mock
 from oslo_config import cfg
 
 from mistral.actions import base as action_base
+from mistral.actions import std_actions
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
 from mistral.services import workbooks as wb_service
@@ -37,10 +39,10 @@ WB = """
 ---
 version: "2.0"
 
-name: wb1
+name: wb
 
 workflows:
-  with_items:
+  wf:
     type: direct
 
     input:
@@ -59,10 +61,10 @@ WB_WITH_STATIC_VAR = """
 ---
 version: "2.0"
 
-name: wb1
+name: wb
 
 workflows:
-  with_items:
+  wf:
     type: direct
 
     input:
@@ -82,10 +84,10 @@ WB_MULTI_ARRAY = """
 ---
 version: "2.0"
 
-name: wb1
+name: wb
 
 workflows:
-  with_items:
+  wf:
     type: direct
 
     input:
@@ -108,10 +110,10 @@ WB_ACTION_CONTEXT = """
 ---
 version: "2.0"
 
-name: wb1
+name: wb
 
 workflows:
-  wf1_with_items:
+  wf:
     type: direct
 
     input:
@@ -164,43 +166,48 @@ class RandomSleepEchoAction(action_base.Action):
 
 
 class WithItemsEngineTest(base.EngineTestCase):
-    def assert_capacity(self, capacity, task_ex):
+    def _assert_capacity(self, capacity, task_ex):
         self.assertEqual(
             capacity,
-            task_ex.runtime_context['with_items_context']['capacity']
+            task_ex.runtime_context['with_items']['capacity']
         )
 
     @staticmethod
-    def get_incomplete_action_ex(task_ex):
-        return [ex for ex in task_ex.executions if not ex.accepted][0]
+    def _get_incomplete_action(task_ex):
+        return [e for e in task_ex.executions if not e.accepted][0]
 
     @staticmethod
-    def get_running_action_exs_number(task_ex):
-        return len([ex for ex in task_ex.executions
-                   if ex.state == states.RUNNING])
+    def _get_running_actions_count(task_ex):
+        return len(
+            [e for e in task_ex.executions if e.state == states.RUNNING]
+        )
 
     def test_with_items_simple(self):
         wb_service.create_workbook_v2(WB)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', WF_INPUT)
+        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
         task1_ex = self._assert_single_item(task_execs, name='task1')
 
-        with_items_ctx = task1_ex.runtime_context['with_items_context']
+        with_items_ctx = task1_ex.runtime_context['with_items']
 
         self.assertEqual(3, with_items_ctx['count'])
 
         # Since we know that we can receive results in random order,
         # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task1_ex)
+        with db_api.transaction():
+            task1_ex = db_api.get_task_execution(task1_ex.id)
+
+            result = data_flow.get_task_execution_result(task1_ex)
 
         self.assertIsInstance(result, list)
 
@@ -219,7 +226,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_text = """---
         version: "2.0"
 
-        with_items:
+        wf:
           type: direct
 
           tasks:
@@ -235,20 +242,21 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('with_items', {})
+        wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(2, len(wf_ex.task_executions))
+            self.assertEqual(2, len(wf_ex.task_executions))
 
     def test_with_items_yaql_fail(self):
         wf_text = """---
         version: "2.0"
 
-        with_items:
+        wf:
           type: direct
 
           tasks:
@@ -260,16 +268,19 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('with_items', {})
+        wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
-        task1 = self._assert_single_item(tasks, name='task1')
-        result = data_flow.get_task_execution_result(task1)
+            tasks = wf_ex.task_executions
+
+            task1 = self._assert_single_item(tasks, name='task1')
+
+            result = data_flow.get_task_execution_result(task1)
 
         self.assertEqual(states.ERROR, task1.state)
         self.assertIsInstance(result, list)
@@ -282,19 +293,19 @@ class WithItemsEngineTest(base.EngineTestCase):
         name: wb1
 
         workflows:
-          with_items:
+          wf:
             type: direct
 
             tasks:
               task1:
                 with-items: i in [1, 2, 3]
-                workflow: subworkflow
+                workflow: subwf
                 on-error: task2
 
               task2:
                 action: std.echo output="With-items failed"
 
-          subworkflow:
+          subwf:
             type: direct
 
             tasks:
@@ -305,14 +316,15 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', {})
+        wf_ex = self.engine.start_workflow('wb1.wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(2, len(wf_ex.task_executions))
+            self.assertEqual(2, len(wf_ex.task_executions))
 
     def test_with_items_static_var(self):
         wb_service.create_workbook_v2(WB_WITH_STATIC_VAR)
@@ -321,16 +333,18 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_input.update({'greeting': 'Hello'})
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', wf_input)
+        wf_ex = self.engine.start_workflow('wb.wf', wf_input)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
-        task1 = self._assert_single_item(tasks, name='task1')
-        result = data_flow.get_task_execution_result(task1)
+            tasks = wf_ex.task_executions
+            task1 = self._assert_single_item(tasks, name='task1')
+
+            result = data_flow.get_task_execution_result(task1)
 
         self.assertIsInstance(result, list)
 
@@ -347,20 +361,21 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_input = {'arrayI': ['a', 'b', 'c'], 'arrayJ': [1, 2, 3]}
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', wf_input)
+        wf_ex = self.engine.start_workflow('wb.wf', wf_input)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
-        task1_ex = self._assert_single_item(task_execs, name='task1')
+            task1_ex = self._assert_single_item(task_execs, name='task1')
 
-        # Since we know that we can receive results in random order,
-        # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task1_ex)
+            # Since we know that we can receive results in random order,
+            # check is not depend on order of items.
+            result = data_flow.get_task_execution_result(task1_ex)
 
         self.assertIsInstance(result, list)
 
@@ -375,12 +390,14 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WB_ACTION_CONTEXT)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.wf1_with_items', WF_INPUT_URLS)
+        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT_URLS)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
-        task_ex = wf_ex.task_executions[0]
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        act_exs = task_ex.executions
+            task_ex = wf_ex.task_executions[0]
+
+            act_exs = task_ex.executions
 
         self.engine.on_action_complete(act_exs[0].id, wf_utils.Result("Ivan"))
         self.engine.on_action_complete(act_exs[1].id, wf_utils.Result("John"))
@@ -389,13 +406,12 @@ class WithItemsEngineTest(base.EngineTestCase):
             wf_utils.Result("Mistral")
         )
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
 
-        task_ex = db_api.get_task_execution(task_ex.id)
-        result = data_flow.get_task_execution_result(task_ex)
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
 
@@ -435,12 +451,13 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_input = {'names_info': []}
         wf_ex = self.engine.start_workflow('wb1.with_items', wf_input)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
         task1_ex = self._assert_single_item(task_execs, name='task1')
         task2_ex = self._assert_single_item(task_execs, name='task2')
@@ -470,18 +487,19 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wb1.with_items', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task1_ex = self._assert_single_item(
-            wf_ex.task_executions,
-            name='task1',
-            state=states.SUCCESS
-        )
+            task1_ex = self._assert_single_item(
+                wf_ex.task_executions,
+                name='task1',
+                state=states.SUCCESS
+            )
 
-        result = data_flow.get_task_execution_result(task1_ex)
+            result = data_flow.get_task_execution_result(task1_ex)
 
         # Since we know that we can receive results in random order,
         # check is not depend on order of items.
@@ -538,13 +556,16 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wb1.with_items', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         task1_ex = self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -558,24 +579,25 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WB)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', WF_INPUT_ONE_ITEM)
+        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT_ONE_ITEM)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
-        self.assertEqual(1, len(task_execs))
+            self.assertEqual(1, len(task_execs))
 
-        task1_ex = self._assert_single_item(
-            task_execs,
-            name='task1',
-            state=states.SUCCESS
-        )
+            task1_ex = self._assert_single_item(
+                task_execs,
+                name='task1',
+                state=states.SUCCESS
+            )
 
-        result = data_flow.get_task_execution_result(task1_ex)
+            result = data_flow.get_task_execution_result(task1_ex)
 
         self.assertIsInstance(result, list)
         self.assertIn('Guy', result)
@@ -586,9 +608,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_with_concurrency_1 = """---
         version: "2.0"
 
-        concurrency_test:
-          type: direct
-
+        wf:
           input:
            - names: ["John", "Ivan", "Mistral"]
 
@@ -602,55 +622,67 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_1)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('concurrency_test', {})
+        wf_ex = self.engine.start_workflow('wf', {})
 
-        wf_ex = db_api.get_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_ex = wf_ex.task_executions[0]
-        task_ex = db_api.get_task_execution(task_ex.id)
+            # Also initialize lazy collections.
+            task_ex = wf_ex.task_executions[0]
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(1, self.get_running_action_exs_number(task_ex))
+            self._assert_capacity(0, task_ex)
+            self.assertEqual(1, self._get_running_actions_count(task_ex))
 
         # 1st iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("John")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        # Wait till the delayed on_action_complete is processed.
+        # 1 is always there to periodically check WF completion.
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(1, self.get_running_action_exs_number(task_ex))
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self._assert_capacity(0, task_ex)
+            self.assertEqual(1, self._get_running_actions_count(task_ex))
 
         # 2nd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("Ivan")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(1, self.get_running_action_exs_number(task_ex))
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self._assert_capacity(0, task_ex)
+            self.assertEqual(1, self._get_running_actions_count(task_ex))
 
         # 3rd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("Mistral")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
-
-        self.assert_capacity(1, task_ex)
-
-        self.await_execution_success(wf_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
 
         task_ex = db_api.get_task_execution(task_ex.id)
+
+        self._assert_capacity(1, task_ex)
+
+        self.await_workflow_success(wf_ex.id)
 
         # Since we know that we can receive results in random order,
-        # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task_ex)
+        # the check does not depend on order of items.
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
 
@@ -661,10 +693,12 @@ class WithItemsEngineTest(base.EngineTestCase):
         self.assertEqual(states.SUCCESS, task_ex.state)
 
     def test_with_items_concurrency_yaql(self):
-        wf_with_concurrency_yaql = """---
+        # TODO(rakhmerov): This test passes even with broken 'concurrency'.
+        # The idea of the test is not fully clear.
+        wf_text = """---
         version: "2.0"
 
-        concurrency_test:
+        wf:
           type: direct
 
           input:
@@ -678,28 +712,26 @@ class WithItemsEngineTest(base.EngineTestCase):
               concurrency: <% $.concurrency %>
         """
 
-        wf_service.create_workflows(wf_with_concurrency_yaql)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow(
-            'concurrency_test',
-            {'concurrency': 2}
-        )
+        wf_ex = self.engine.start_workflow('wf', {'concurrency': 2})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_ex = wf_ex.task_executions[0]
+            task_ex = wf_ex.task_executions[0]
 
-        self.assertEqual(states.SUCCESS, task_ex.state)
+            self.assertEqual(states.SUCCESS, task_ex.state)
 
-        # Since we know that we can receive results in random order,
-        # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task_ex)
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
 
+        # Since we know that we can receive results in random order,
+        # the check does not depend on order of items.
         self.assertIn('John', result)
         self.assertIn('Ivan', result)
         self.assertIn('Mistral', result)
@@ -708,7 +740,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_with_concurrency_yaql = """---
         version: "2.0"
 
-        concurrency_test:
+        wf:
           type: direct
 
           input:
@@ -725,10 +757,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_yaql)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow(
-            'concurrency_test',
-            {'concurrency': '2'}
-        )
+        wf_ex = self.engine.start_workflow('wf', {'concurrency': '2'})
 
         self.assertIn(
             'Invalid data type in ConcurrencyPolicy',
@@ -740,7 +769,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_with_concurrency_2 = """---
         version: "2.0"
 
-        concurrency_test:
+        wf:
           type: direct
 
           input:
@@ -756,63 +785,87 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_2)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('concurrency_test', {})
+        wf_ex = self.engine.start_workflow('wf', {})
 
-        wf_ex = db_api.get_execution(wf_ex.id)
-        task_ex = wf_ex.task_executions[0]
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(2, self.get_running_action_exs_number(task_ex))
+            task_ex = wf_ex.task_executions[0]
+
+            running_cnt = self._get_running_actions_count(task_ex)
+
+        self._assert_capacity(0, task_ex)
+        self.assertEqual(2, running_cnt)
 
         # 1st iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("John")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        # Wait till the delayed on_action_complete is processed.
+        # 1 is always there to periodically check WF completion.
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(2, self.get_running_action_exs_number(task_ex))
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            running_cnt = self._get_running_actions_count(task_ex)
+
+        self._assert_capacity(0, task_ex)
+        self.assertEqual(2, running_cnt)
 
         # 2nd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("Ivan")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(2, self.get_running_action_exs_number(task_ex))
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            running_cnt = self._get_running_actions_count(task_ex)
+
+        self._assert_capacity(0, task_ex)
+        self.assertEqual(2, running_cnt)
 
         # 3rd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("Mistral")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(1, task_ex)
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self._assert_capacity(1, task_ex)
+
+            incomplete_action = self._get_incomplete_action(task_ex)
 
         # 4th iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            incomplete_action.id,
             wf_utils.Result("Hello")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
-
-        self.assert_capacity(2, task_ex)
-
-        self.await_execution_success(wf_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
 
         task_ex = db_api.get_task_execution(task_ex.id)
+
+        self._assert_capacity(2, task_ex)
+
+        self.await_workflow_success(wf_ex.id)
 
         # Since we know that we can receive results in random order,
         # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task_ex)
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
 
@@ -846,20 +899,23 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('concurrency_test_fail', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_exs = wf_ex.task_executions
+            task_exs = wf_ex.task_executions
 
         self.assertEqual(2, len(task_exs))
 
         task_2 = self._assert_single_item(task_exs, name='task2')
 
-        self.assertEqual(
-            'With-items failed',
-            data_flow.get_task_execution_result(task_2)
-        )
+        with db_api.transaction():
+            task_2 = db_api.get_task_execution(task_2.id)
+
+            result = data_flow.get_task_execution_result(task_2)
+
+        self.assertEqual('With-items failed', result)
 
     def test_with_items_concurrency_3(self):
         wf_with_concurrency_3 = """---
@@ -884,51 +940,69 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('concurrency_test', {})
 
-        wf_ex = db_api.get_execution(wf_ex.id)
-        task_ex = wf_ex.task_executions[0]
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assert_capacity(0, task_ex)
-        self.assertEqual(3, self.get_running_action_exs_number(task_ex))
+            task_ex = wf_ex.task_executions[0]
+            running_cnt = self._get_running_actions_count(task_ex)
+
+        self._assert_capacity(0, task_ex)
+        self.assertEqual(3, running_cnt)
 
         # 1st iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            self._get_incomplete_action(task_ex).id,
             wf_utils.Result("John")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        # Wait till the delayed on_action_complete is processed.
+        # 1 is always there to periodically check WF completion.
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(1, task_ex)
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self._assert_capacity(1, task_ex)
+
+            incomplete_action = self._get_incomplete_action(task_ex)
 
         # 2nd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            incomplete_action.id,
             wf_utils.Result("Ivan")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) == 1)
 
-        self.assert_capacity(2, task_ex)
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self._assert_capacity(2, task_ex)
+
+            incomplete_action = self._get_incomplete_action(task_ex)
 
         # 3rd iteration complete.
         self.engine.on_action_complete(
-            self.get_incomplete_action_ex(task_ex).id,
+            incomplete_action.id,
             wf_utils.Result("Mistral")
         )
 
-        task_ex = db_api.get_task_execution(task_ex.id)
-
-        self.assert_capacity(3, task_ex)
-
-        self.await_execution_success(wf_ex.id)
+        self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
 
         task_ex = db_api.get_task_execution(task_ex.id)
 
-        self.assertEqual(states.SUCCESS, task_ex.state)
+        self._assert_capacity(3, task_ex)
 
-        # Since we know that we can receive results in random order,
-        # check is not depend on order of items.
-        result = data_flow.get_task_execution_result(task_ex)
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            self.assertEqual(states.SUCCESS, task_ex.state)
+
+            # Since we know that we can receive results in random order,
+            # check is not depend on order of items.
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
 
@@ -937,6 +1011,8 @@ class WithItemsEngineTest(base.EngineTestCase):
         self.assertIn('Mistral', result)
 
     def test_with_items_concurrency_gt_list_length(self):
+        # TODO(rakhmerov): This test passes even with disabled 'concurrency'
+        # support. Make sure it's valid.
         wf_definition = """---
         version: "2.0"
 
@@ -958,17 +1034,20 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('concurrency_test', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_ex = self._assert_single_item(
-            wf_ex.task_executions,
-            name='task1',
-            state=states.SUCCESS
-        )
+            task_execs = wf_ex.task_executions
 
-        result = data_flow.get_task_execution_result(task_ex)
+            task_ex = self._assert_single_item(
+                task_execs,
+                name='task1',
+                state=states.SUCCESS
+            )
+
+            result = data_flow.get_task_execution_result(task_ex)
 
         self.assertIsInstance(result, list)
         self.assertIn('John', result)
@@ -997,29 +1076,32 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('with_items_retry', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
-        self.assertEqual(2, len(task_execs))
+            self.assertEqual(2, len(task_execs))
 
-        task1_ex = self._assert_single_item(task_execs, name='task1')
+            task1_ex = self._assert_single_item(task_execs, name='task1')
+
+            task1_executions = task1_ex.executions
 
         self.assertEqual(
-            2,
+            3,
             task1_ex.runtime_context['retry_task_policy']['retry_no']
         )
-        self.assertEqual(9, len(task1_ex.executions))
-        self._assert_multiple_items(task1_ex.executions, 3, accepted=True)
+        self.assertEqual(12, len(task1_executions))
+        self._assert_multiple_items(task1_executions, 3, accepted=True)
 
-    def test_with_items_retry_policy_concurrency(self):
+    def test_with_items_concurrency_retry_policy(self):
         wf_text = """---
         version: "2.0"
 
-        with_items_retry_concurrency:
+        wf:
           tasks:
             task1:
               with-items: i in [1, 2, 3, 4]
@@ -1037,27 +1119,32 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('with_items_retry_concurrency', {})
+        wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(2, len(task_execs))
 
         task1_ex = self._assert_single_item(task_execs, name='task1')
 
-        self.assertEqual(12, len(task1_ex.executions))
-        self._assert_multiple_items(task1_ex.executions, 4, accepted=True)
+        with db_api.transaction():
+            task1_ex = db_api.get_task_execution(task1_ex.id)
+
+            task1_execs = task1_ex.executions
+
+        self.assertEqual(16, len(task1_execs))
+        self._assert_multiple_items(task1_execs, 4, accepted=True)
 
     def test_with_items_env(self):
         wf_text = """---
         version: "2.0"
 
-        with_items_env:
+        wf:
           tasks:
             task1:
               with-items: i in [1, 2, 3, 4]
@@ -1067,21 +1154,20 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow(
-            'with_items_env',
-            {},
-            env={'name': 'Mistral'}
-        )
+        wf_ex = self.engine.start_workflow('wf', {}, env={'name': 'Mistral'})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
-        task1 = self._assert_single_item(tasks, name='task1')
+            task1 = self._assert_single_item(
+                wf_ex.task_executions,
+                name='task1'
+            )
 
-        result = data_flow.get_task_execution_result(task1)
+            result = data_flow.get_task_execution_result(task1)
 
         self.assertEqual(
             [
@@ -1120,12 +1206,13 @@ class WithItemsEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wb1.with_items', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        task_execs = wf_ex.task_executions
+            task_execs = wf_ex.task_executions
 
         task1_ex = self._assert_single_item(
             task_execs,
@@ -1138,8 +1225,12 @@ class WithItemsEngineTest(base.EngineTestCase):
             state=states.SUCCESS
         )
 
-        result_task1 = data_flow.get_task_execution_result(task1_ex)
-        result_task2 = data_flow.get_task_execution_result(task2_ex)
+        with db_api.transaction():
+            task1_ex = db_api.get_task_execution(task1_ex.id)
+            task2_ex = db_api.get_task_execution(task2_ex.id)
+
+            result_task1 = data_flow.get_task_execution_result(task1_ex)
+            result_task2 = data_flow.get_task_execution_result(task2_ex)
 
         # Since we know that we can receive results in random order,
         # check is not depend on order of items.
@@ -1185,19 +1276,88 @@ class WithItemsEngineTest(base.EngineTestCase):
         names = ["Peter", "Susan", "Edmund", "Lucy", "Aslan", "Caspian"]
         wf_ex = self.engine.start_workflow('wb1.main', {'names': names})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         task_ex = self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
 
-        result = [
-            item['result']
-            for item in data_flow.get_task_execution_result(task_ex)
-        ]
+        with db_api.transaction():
+            task_ex = db_api.get_task_execution(task_ex.id)
+
+            task_result = data_flow.get_task_execution_result(task_ex)
+
+        result = [item['result'] for item in task_result]
 
         self.assertListEqual(sorted(result), sorted(names))
+
+    @mock.patch.object(std_actions.HTTPAction, 'run')
+    def test_with_items_and_adhoc_action(self, mock_http_action):
+
+        wb_text = """---
+        version: "2.0"
+
+        name: test
+
+        actions:
+          http:
+            input:
+              - url: http://www.example.com
+              - method: GET
+              - timeout: 10
+
+            output: <% $.content %>
+
+            base: std.http
+            base-input:
+              url: <% $.url %>
+              method: <% $.method %>
+              timeout: <% $.timeout %>
+
+        workflows:
+          with_items_default_bug:
+            description: Re-create the with-items bug with default values
+            type: direct
+
+            tasks:
+              get_pages:
+                with-items: page in <% range(0, 1) %>
+                action: test.http
+                input:
+                  url: http://www.example.com
+                  method: GET
+                on-success:
+                  - well_done
+
+              well_done:
+                action: std.echo output="Well done"
+        """
+
+        wb_service.create_workbook_v2(wb_text)
+
+        # Start workflow.
+        wf_ex = self.engine.start_workflow('test.with_items_default_bug', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        task1_ex = self._assert_single_item(task_execs, name='get_pages')
+        task2_ex = self._assert_single_item(task_execs, name='well_done')
+
+        self.assertEqual(2, len(task_execs))
+        self.assertEqual(states.SUCCESS, task1_ex.state)
+        self.assertEqual(states.SUCCESS, task2_ex.state)
+
+        self.assertEqual(1, mock_http_action.call_count)

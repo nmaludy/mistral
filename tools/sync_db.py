@@ -12,6 +12,9 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+import sys
+
+import keystonemiddleware.opts as keystonemw_opts
 from oslo_config import cfg
 from oslo_log import log as logging
 
@@ -25,6 +28,14 @@ CONF = cfg.CONF
 
 
 def main():
+    # NOTE(jaosorior): This is needed in order for db-sync to also register the
+    # keystonemiddleware options. Those options are used by clients that need a
+    # keystone session in order to be able to register their actions.
+    # This can be removed when mistral moves out of using keystonemiddleware in
+    # favor of keystoneauth1.
+    for group, opts in keystonemw_opts.list_auth_token_opts():
+        CONF.register_opts(opts, group=group)
+
     config.parse_args()
 
     if len(CONF.config_file) == 0:
@@ -40,4 +51,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -24,45 +24,44 @@ def create_actions(definition, scope='private'):
 
     db_actions = []
 
-    with db_api.transaction():
-        for action_spec in action_list_spec.get_actions():
-            db_actions.append(create_action(action_spec, definition, scope))
+    for action_spec in action_list_spec.get_actions():
+        db_actions.append(create_action(action_spec, definition, scope))
 
     return db_actions
 
 
-def update_actions(definition, scope='private', run_in_tx=True):
+def update_actions(definition, scope='private', identifier=None):
+    action_list_spec = spec_parser.get_action_list_spec_from_yaml(definition)
+    actions = action_list_spec.get_actions()
+
+    if identifier and len(actions) > 1:
+        raise exc.InputException(
+            "More than one actions are not supported for "
+            "update with identifier. [identifier: %s]" %
+            identifier
+        )
+
+    db_actions = []
+
+    for action_spec in action_list_spec.get_actions():
+        db_actions.append(update_action(
+            action_spec,
+            definition,
+            scope,
+            identifier=identifier
+        ))
+
+    return db_actions
+
+
+def create_or_update_actions(definition, scope='private'):
     action_list_spec = spec_parser.get_action_list_spec_from_yaml(definition)
 
     db_actions = []
 
-    if run_in_tx:
-        with db_api.transaction():
-            db_actions = _append_all_actions(
-                action_list_spec,
-                db_actions,
-                definition,
-                scope
-            )
-    else:
-        db_actions = _append_all_actions(
-            action_list_spec,
-            db_actions,
-            definition,
-            scope
-        )
-
-    return db_actions
-
-
-def _append_all_actions(action_list_spec, db_actions, definition, scope):
     for action_spec in action_list_spec.get_actions():
         db_actions.append(
-            create_or_update_action(
-                action_spec,
-                definition,
-                scope
-            )
+            create_or_update_action(action_spec, definition, scope)
         )
 
     return db_actions
@@ -71,6 +70,23 @@ def _append_all_actions(action_list_spec, db_actions, definition, scope):
 def create_action(action_spec, definition, scope):
     return db_api.create_action_definition(
         _get_action_values(action_spec, definition, scope)
+    )
+
+
+def update_action(action_spec, definition, scope, identifier=None):
+    action = db_api.load_action_definition(action_spec.get_name())
+
+    if action and action.is_system:
+        raise exc.InvalidActionException(
+            "Attempt to modify a system action: %s" %
+            action.name
+        )
+
+    values = _get_action_values(action_spec, definition, scope)
+
+    return db_api.update_action_definition(
+        identifier if identifier else values['name'],
+        values
     )
 
 

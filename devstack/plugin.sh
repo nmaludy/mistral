@@ -33,14 +33,12 @@ function create_mistral_accounts {
 
     create_service_user "mistral" "admin"
 
-    if [[ "$KEYSTONE_CATALOG_BACKEND" = 'sql' ]]; then
-        get_or_create_service "mistral" "workflowv2" "Workflow Service v2"
-        get_or_create_endpoint "workflowv2" \
-            "$REGION_NAME" \
-            "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2" \
-            "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2" \
-            "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2"
-    fi
+    get_or_create_service "mistral" "workflowv2" "Workflow Service v2"
+    get_or_create_endpoint "workflowv2" \
+        "$REGION_NAME" \
+        "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2" \
+        "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2" \
+        "$MISTRAL_SERVICE_PROTOCOL://$MISTRAL_SERVICE_HOST:$MISTRAL_SERVICE_PORT/v2"
 }
 
 
@@ -61,6 +59,9 @@ function configure_mistral {
     # Generate Mistral configuration file and configure common parameters.
     oslo-config-generator --config-file $MISTRAL_DIR/tools/config/config-generator.mistral.conf --output-file $MISTRAL_CONF_FILE
     iniset $MISTRAL_CONF_FILE DEFAULT debug $MISTRAL_DEBUG
+
+    MISTRAL_POLICY_FILE=$MISTRAL_CONF_DIR/policy.json
+    cp $MISTRAL_DIR/etc/policy.json $MISTRAL_POLICY_FILE
 
     # Run all Mistral processes as a single process
     iniset $MISTRAL_CONF_FILE DEFAULT server all
@@ -89,8 +90,15 @@ function configure_mistral {
     # Configure action execution deletion policy
     iniset $MISTRAL_CONF_FILE api allow_action_execution_deletion True
 
+    # Path of policy.json file.
+    iniset $MISTRAL_CONF oslo_policy policy_file $MISTRAL_POLICY_FILE
+
     if [ "$LOG_COLOR" == "True" ] && [ "$SYSLOG" == "False" ]; then
         setup_colorized_logging $MISTRAL_CONF_FILE DEFAULT tenant user
+    fi
+
+    if [ "$MISTRAL_RPC_IMPLEMENTATION" ]; then
+        iniset $MISTRAL_CONF_FILE DEFAULT rpc_implementation $MISTRAL_RPC_IMPLEMENTATION
     fi
 }
 
@@ -119,7 +127,7 @@ function install_mistral {
 function _install_mistraldashboard {
     git_clone $MISTRAL_DASHBOARD_REPO $MISTRAL_DASHBOARD_DIR $MISTRAL_DASHBOARD_BRANCH
     setup_develop $MISTRAL_DASHBOARD_DIR
-    ln -fs $MISTRAL_DASHBOARD_DIR/_50_mistral.py.example $HORIZON_DIR/openstack_dashboard/local/enabled/_50_mistral.py
+    ln -fs $MISTRAL_DASHBOARD_DIR/mistraldashboard/enabled/_50_mistral.py $HORIZON_DIR/openstack_dashboard/local/enabled/_50_mistral.py
 }
 
 
@@ -137,11 +145,12 @@ function install_mistral_pythonclient {
 
 # start_mistral - Start running processes, including screen
 function start_mistral {
-    if is_service_enabled mistral-api && is_service_enabled mistral-engine && is_service_enabled mistral-executor ; then
+    if is_service_enabled mistral-api && is_service_enabled mistral-engine && is_service_enabled mistral-executor && is_service_enabled mistral-event-engine ; then
         echo_summary "Installing all mistral services in separate processes"
         run_process mistral-api "$MISTRAL_BIN_DIR/mistral-server --server api --config-file $MISTRAL_CONF_DIR/mistral.conf"
         run_process mistral-engine "$MISTRAL_BIN_DIR/mistral-server --server engine --config-file $MISTRAL_CONF_DIR/mistral.conf"
         run_process mistral-executor "$MISTRAL_BIN_DIR/mistral-server --server executor --config-file $MISTRAL_CONF_DIR/mistral.conf"
+        run_process mistral-event-engine "$MISTRAL_BIN_DIR/mistral-server --server event-engine --config-file $MISTRAL_CONF_DIR/mistral.conf"
     else
         echo_summary "Installing all mistral services in one process"
         run_process mistral "$MISTRAL_BIN_DIR/mistral-server --server all --config-file $MISTRAL_CONF_DIR/mistral.conf"
@@ -152,7 +161,7 @@ function start_mistral {
 # stop_mistral - Stop running processes
 function stop_mistral {
     # Kill the Mistral screen windows
-    for serv in mistral mistral-api mistral-engine mistral-executor; do
+    for serv in mistral mistral-api mistral-engine mistral-executor mistral-event-engine; do
         stop_process $serv
     done
 }

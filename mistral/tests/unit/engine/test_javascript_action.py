@@ -74,7 +74,7 @@ class JavaScriptEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('test_js.js_test', {'num': 50})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -93,11 +93,13 @@ class JavaScriptEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('test_js.js_test', {'num': 50})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
-        task_ex = wf_ex.task_executions[0]
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_ex = wf_ex.task_executions[0]
 
         self.assertEqual(states.SUCCESS, task_ex.state)
         self.assertDictEqual({}, task_ex.runtime_context)

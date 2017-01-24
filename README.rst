@@ -1,3 +1,12 @@
+========================
+Team and repository tags
+========================
+
+.. image:: http://governance.openstack.org/badges/mistral.svg
+    :target: http://governance.openstack.org/reference/tags/index.html
+
+.. Change things from this point on
+
 Mistral
 =======
 
@@ -49,7 +58,7 @@ First of all, clone the repo and go to the repo directory::
 **Devstack installation**
 
 Information about how to install Mistral with devstack can be found
-`here <https://git.openstack.org/openstack/mistral/tree/master/devstack>`_.
+`here <http://docs.openstack.org/developer/mistral/developer/devstack.html>`_.
 
 **Virtualenv installation**::
 
@@ -64,6 +73,7 @@ Installing virtual environments may take significant time (~10-15 mins).
 
 or::
 
+  $ pip install -r requirements.txt
   $ python setup.py install
 
 
@@ -87,6 +97,9 @@ an OpenStack environment.
 
      $ tox -evenv -- pip install mysql-python
 
+     NOTE: If you're using Python 3 then you need to install ``mysqlclient``
+     instead of ``mysql-python``.
+
    * Create the database and grant privileges::
 
      $ mysql -u root -p
@@ -98,9 +111,19 @@ an OpenStack environment.
 
     $ oslo-config-generator \
       --config-file tools/config/config-generator.mistral.conf \
-      --output-file etc/mistral.conf
+      --output-file etc/mistral.conf.sample
 
-#. Edit file ``etc/mistral.conf`` according to your setup. Pay attention to
+#. Copy service configuration files::
+
+    $ sudo mkdir /etc/mistral
+    $ sudo chown `whoami` /etc/mistral
+    $ cp etc/event_definitionas.yml.sample /etc/mistral/event_definitions.yml
+    $ cp etc/logging.conf.sample /etc/mistral/logging.conf
+    $ cp etc/policy.json /etc/mistral/policy.json
+    $ cp etc/wf_trace_logging.conf.sample /etc/mistral/wf_trace_logging.conf
+    $ cp etc/mistral.conf.sample /etc/mistral/mistral.conf
+
+#. Edit file ``/etc/mistral/mistral.conf`` according to your setup. Pay attention to
    the following sections and options::
 
     [oslo_messaging_rabbit]
@@ -114,7 +137,7 @@ an OpenStack environment.
     connection = mysql://<DB_USER>:<DB_PASSWORD>@localhost:3306/mistral
 
 #. If you are not using OpenStack, add the following entry to the
-   ``/etc/mistral.conf`` file and **skip the following steps**::
+   ``/etc/mistral/mistral.conf`` file and **skip the following steps**::
 
     [pecan]
     auth_enable = False
@@ -122,8 +145,8 @@ an OpenStack environment.
 #. Provide valid keystone auth properties::
 
     [keystone_authtoken]
-    auth_uri = http://<Keystone-host>:5000/v3
-    identity_uri = http://<Keystone-host:35357/
+    auth_uri = http://<Keystone-host>/identity_v2_admin/v3
+    identity_uri = http://<Keystone-host/identity_v2_admin
     auth_version = v3
     admin_user = <user>
     admin_password = <password>
@@ -133,11 +156,9 @@ an OpenStack environment.
 
     $ MISTRAL_URL="http://[host]:[port]/v2"
     $ openstack service create --name mistral workflowv2
-    $ openstack endpoint create \
-        --publicurl $MISTRAL_URL \
-        --adminurl $MISTRAL_URL \
-        --internalurl $MISTRAL_URL \
-        mistral
+    $ openstack endpoint create mistral public $MISTRAL_URL
+    $ openstack endpoint create mistral internal $MISTRAL_URL
+    $ openstack endpoint create mistral admin $MISTRAL_URL
 
 #. Update the ``mistral/actions/openstack/mapping.json`` file which contains
    all available OpenStack actions, according to the specific client versions
@@ -254,7 +275,7 @@ Debugging
 ~~~~~~~~~
 
 To debug using a local engine and executor without dependencies such as
-RabbitMQ, make sure your ``etc/mistral.conf`` has the following settings::
+RabbitMQ, make sure your ``/etc/mistral/mistral.conf`` has the following settings::
 
   [DEFAULT]
   rpc_backend = fake
@@ -264,7 +285,29 @@ RabbitMQ, make sure your ``etc/mistral.conf`` has the following settings::
 
 and run the following command in *pdb*, *PyDev* or *PyCharm*::
 
-  mistral/cmd/launch.py --server all --config-file etc/mistral.conf --use-debugger
+  mistral/cmd/launch.py --server all --config-file /etc/mistral/mistral.conf --use-debugger
+
+.. note::
+
+    In PyCharm, you also need to enable the Gevent compatibility flag in
+    Settings -> Build, Execution, Deployment -> Python Debugger -> Gevent
+    compatible. Without this setting, PyCharm will not show variable values
+    and become unstable during debugging.
+
+
+Running unit tests in PyCharm
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In order to be able to conveniently run unit tests, you need to:
+
+1. Set unit tests as the default runner:
+
+  Settings -> Tools -> Python Integrated Tools -> Default test runner: Unittests
+
+2. Enable test detection for all classes:
+
+  Run/Debug Configurations -> Defaults -> Python tests -> Unittests -> uncheck
+  Inspect only subclasses of unittest.TestCase
 
 Running examples
 ~~~~~~~~~~~~~~~~

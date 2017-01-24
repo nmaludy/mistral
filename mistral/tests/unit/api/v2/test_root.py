@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,12 +24,12 @@ class TestRootController(base.APITest):
         self.assertEqual(200, resp.status_int)
 
         data = jsonutils.loads(resp.body.decode())
-
+        data = data['versions']
         self.assertEqual('v2.0', data[0]['id'])
         self.assertEqual('CURRENT', data[0]['status'])
         self.assertEqual(
-            {'href': 'http://localhost/v2', 'target': 'v2'},
-            data[0]['link']
+            [{'href': 'http://localhost/v2', 'rel': 'self', 'target': 'v2'}],
+            data[0]['links']
         )
 
     def test_v2_root(self):
@@ -54,12 +52,12 @@ class TestRootControllerWithAuth(test_auth.TestKeystoneMiddleware):
         self.assertEqual(200, resp.status_int)
 
         data = jsonutils.loads(resp.body.decode())
-
+        data = data['versions']
         self.assertEqual('v2.0', data[0]['id'])
         self.assertEqual('CURRENT', data[0]['status'])
         self.assertEqual(
-            {'href': 'http://localhost/v2', 'target': 'v2'},
-            data[0]['link']
+            [{'href': 'http://localhost/v2', 'rel': 'self', 'target': 'v2'}],
+            data[0]['links']
         )
 
     def test_v2_root(self):

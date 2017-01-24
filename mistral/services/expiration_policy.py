@@ -61,7 +61,7 @@ def run_execution_expiration_policy(self, ctx):
     LOG.debug("Starting expiration policy task.")
 
     older_than = CONF.execution_expiration_policy.older_than
-    exp_time = (datetime.datetime.now()
+    exp_time = (datetime.datetime.utcnow()
                 - datetime.timedelta(minutes=older_than))
 
     with db_api.transaction():
@@ -86,8 +86,8 @@ def run_execution_expiration_policy(self, ctx):
                 )
                 db_api.delete_workflow_execution(execution.id)
             except Exception as e:
-                msg = "Failed to delete [execution_id=%s]\n %s" \
-                      % (execution.id, traceback.format_exc(e))
+                msg = ("Failed to delete [execution_id=%s]\n %s"
+                       % (execution.id, traceback.format_exc(e)))
                 LOG.warning(msg)
             finally:
                 auth_ctx.set_ctx(None)
@@ -110,3 +110,5 @@ def setup():
         periodic_interval_max=1,
         context=ctx
     )
+
+    return tg

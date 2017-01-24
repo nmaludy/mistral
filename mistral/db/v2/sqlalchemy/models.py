@@ -36,13 +36,70 @@ from mistral import utils
 LOG = logging.getLogger(__name__)
 
 
+def _get_hash_function_by(column_name):
+    def calc_hash(context):
+        val = context.current_parameters[column_name] or {}
+
+        if isinstance(val, dict):
+            # If the value is a dictionary we need to make sure to have
+            # keys in the same order in a string representation.
+            hash_base = json.dumps(sorted(val.items()))
+        else:
+            hash_base = str(val)
+
+        return hashlib.sha256(hash_base.encode('utf-8')).hexdigest()
+
+    return calc_hash
+
+
+def validate_long_type_length(cls, field_name, value):
+    """Makes sure the value does not exceeds the maximum size."""
+    if value:
+        # Get the configured limit.
+        size_limit_kb = cfg.CONF.engine.execution_field_size_limit_kb
+
+        # If the size is unlimited.
+        if size_limit_kb < 0:
+            return
+
+        size_kb = int(sys.getsizeof(str(value)) / 1024)
+
+        if size_kb > size_limit_kb:
+            LOG.error(
+                "Size limit %dKB exceed for class [%s], "
+                "field %s of size %dKB.",
+                size_limit_kb, str(cls), field_name, size_kb
+            )
+
+            raise exc.SizeLimitExceededException(
+                field_name,
+                size_kb,
+                size_limit_kb
+            )
+
+
+def register_length_validator(attr_name):
+    """Register an event listener on the attribute.
+
+    This event listener will validate the size every
+    time a 'set' occurs.
+    """
+    for cls in utils.iter_subclasses(Execution):
+        if hasattr(cls, attr_name):
+            event.listen(
+                getattr(cls, attr_name),
+                'set',
+                lambda t, v, o, i: validate_long_type_length(cls, attr_name, v)
+            )
+
+
 class Definition(mb.MistralSecureModelBase):
     __abstract__ = True
 
     id = mb.id_column()
-    name = sa.Column(sa.String(80))
-    definition = sa.Column(sa.Text(), nullable=True)
-    spec = sa.Column(st.JsonDictType())
+    name = sa.Column(sa.String(255))
+    definition = sa.Column(st.MediumText(), nullable=True)
+    spec = sa.Column(st.JsonMediumDictType())
     tags = sa.Column(st.JsonListType())
     is_system = sa.Column(sa.Boolean())
 
@@ -98,79 +155,85 @@ class ActionDefinition(Definition):
 # Execution objects.
 
 class Execution(mb.MistralSecureModelBase):
-    """Abstract execution object."""
+    __abstract__ = True
 
-    __tablename__ = 'executions_v2'
-
-    __table_args__ = (
-        sa.Index('%s_project_id' % __tablename__, 'project_id'),
-        sa.Index('%s_scope' % __tablename__, 'scope'),
-        sa.Index('%s_state' % __tablename__, 'state'),
-        sa.Index('%s_type' % __tablename__, 'type'),
-        sa.Index('%s_updated_at' % __tablename__, 'updated_at'),
-    )
-
-    type = sa.Column(sa.String(50))
-
-    __mapper_args__ = {
-        'polymorphic_on': type,
-        'polymorphic_identity': 'execution'
-    }
-
-    # Main properties.
+    # Common properties.
     id = mb.id_column()
-    name = sa.Column(sa.String(80))
+    name = sa.Column(sa.String(255))
     description = sa.Column(sa.String(255), nullable=True)
-    workflow_name = sa.Column(sa.String(80))
+    workflow_name = sa.Column(sa.String(255))
     workflow_id = sa.Column(sa.String(80))
-    spec = sa.Column(st.JsonDictType())
+    spec = sa.Column(st.JsonMediumDictType())
     state = sa.Column(sa.String(20))
     state_info = sa.Column(sa.Text(), nullable=True)
     tags = sa.Column(st.JsonListType())
 
-    # Runtime context like iteration_no of a repeater.
-    # Effectively internal engine properties which will be used to determine
-    # execution of a task.
+    # Internal properties which can be used by engine.
     runtime_context = sa.Column(st.JsonLongDictType())
 
 
 class ActionExecution(Execution):
     """Contains action execution information."""
 
-    __mapper_args__ = {
-        'polymorphic_identity': 'action_execution'
-    }
+    __tablename__ = 'action_executions_v2'
+
+    __table_args__ = (
+        sa.Index('%s_project_id' % __tablename__, 'project_id'),
+        sa.Index('%s_scope' % __tablename__, 'scope'),
+        sa.Index('%s_state' % __tablename__, 'state'),
+        sa.Index('%s_updated_at' % __tablename__, 'updated_at')
+    )
 
     # Main properties.
     accepted = sa.Column(sa.Boolean(), default=False)
     input = sa.Column(st.JsonLongDictType(), nullable=True)
-
     output = sa.orm.deferred(sa.Column(st.JsonLongDictType(), nullable=True))
 
 
-class WorkflowExecution(ActionExecution):
+class WorkflowExecution(Execution):
     """Contains workflow execution information."""
 
-    __mapper_args__ = {
-        'polymorphic_identity': 'workflow_execution'
-    }
+    __tablename__ = 'workflow_executions_v2'
+
+    __table_args__ = (
+        sa.Index('%s_project_id' % __tablename__, 'project_id'),
+        sa.Index('%s_scope' % __tablename__, 'scope'),
+        sa.Index('%s_state' % __tablename__, 'state'),
+        sa.Index('%s_updated_at' % __tablename__, 'updated_at'),
+    )
 
     # Main properties.
+    accepted = sa.Column(sa.Boolean(), default=False)
+    input = sa.Column(st.JsonLongDictType(), nullable=True)
+    output = sa.orm.deferred(sa.Column(st.JsonLongDictType(), nullable=True))
     params = sa.Column(st.JsonLongDictType())
 
-    # TODO(rakhmerov): We need to get rid of this field at all.
+    # Initial workflow context containing workflow variables, environment,
+    # openstack security context etc.
+    # NOTES:
+    #   * Data stored in this structure should not be copied into inbound
+    #     contexts of tasks. No need to duplicate it.
+    #   * This structure does not contain workflow input.
     context = sa.Column(st.JsonLongDictType())
 
 
 class TaskExecution(Execution):
     """Contains task runtime information."""
 
-    __mapper_args__ = {
-        'polymorphic_identity': 'task_execution'
-    }
+    __tablename__ = 'task_executions_v2'
+
+    __table_args__ = (
+        sa.Index('%s_project_id' % __tablename__, 'project_id'),
+        sa.Index('%s_scope' % __tablename__, 'scope'),
+        sa.Index('%s_state' % __tablename__, 'state'),
+        sa.Index('%s_updated_at' % __tablename__, 'updated_at'),
+        sa.UniqueConstraint('unique_key')
+    )
 
     # Main properties.
     action_spec = sa.Column(st.JsonLongDictType())
+    unique_key = sa.Column(sa.String(250), nullable=True)
+    type = sa.Column(sa.String(10))
 
     # Whether the task is fully processed (publishing and calculating commands
     # after it). It allows to simplify workflow controller implementations
@@ -180,6 +243,14 @@ class TaskExecution(Execution):
     # Data Flow properties.
     in_context = sa.Column(st.JsonLongDictType())
     published = sa.Column(st.JsonLongDictType())
+
+    @property
+    def executions(self):
+        return (
+            self.action_executions
+            if not self.spec.get('workflow')
+            else self.workflow_executions
+        )
 
 
 for cls in utils.iter_subclasses(Execution):
@@ -192,73 +263,53 @@ for cls in utils.iter_subclasses(Execution):
     )
 
 
-def validate_long_type_length(cls, field_name, value):
-    """Makes sure the value does not exceeds the maximum size."""
-    if value:
-        # Get the configured limit.
-        size_limit_kb = cfg.CONF.engine.execution_field_size_limit_kb
+# Many-to-one for 'ActionExecution' and 'TaskExecution'.
 
-        # If the size is unlimited.
-        if (size_limit_kb < 0):
-            return
-
-        size_kb = int(sys.getsizeof(str(value)) / 1024)
-
-        if size_kb > size_limit_kb:
-            LOG.error(
-                "Size limit %dKB exceed for class [%s], "
-                "field %s of size %dKB.",
-                size_limit_kb, str(cls), field_name, size_kb
-            )
-
-            raise exc.SizeLimitExceededException(
-                field_name,
-                size_kb,
-                size_limit_kb
-            )
-
-
-def register_length_validator(attr_name):
-    """Register an event listener on the attribute.
-
-    This event listener will validate the size every
-    time a 'set' occurs.
-    """
-    for cls in utils.iter_subclasses(Execution):
-        if hasattr(cls, attr_name):
-            event.listen(
-                getattr(cls, attr_name),
-                'set',
-                lambda t, v, o, i: validate_long_type_length(cls, attr_name, v)
-            )
-
-# Many-to-one for 'Execution' and 'TaskExecution'.
-
-Execution.task_execution_id = sa.Column(
+ActionExecution.task_execution_id = sa.Column(
     sa.String(36),
-    sa.ForeignKey(TaskExecution.id),
+    sa.ForeignKey(TaskExecution.id, ondelete='CASCADE'),
     nullable=True
 )
 
-TaskExecution.executions = relationship(
-    Execution,
+TaskExecution.action_executions = relationship(
+    ActionExecution,
     backref=backref('task_execution', remote_side=[TaskExecution.id]),
     cascade='all, delete-orphan',
-    foreign_keys=Execution.task_execution_id,
+    foreign_keys=ActionExecution.task_execution_id,
     lazy='select'
 )
 
 sa.Index(
-    '%s_task_execution_id' % Execution.__tablename__,
-    Execution.task_execution_id
+    '%s_task_execution_id' % ActionExecution.__tablename__,
+    'task_execution_id'
 )
 
+# Many-to-one for 'WorkflowExecution' and 'TaskExecution'.
+
+WorkflowExecution.task_execution_id = sa.Column(
+    sa.String(36),
+    sa.ForeignKey(TaskExecution.id, ondelete='CASCADE'),
+    nullable=True
+)
+
+TaskExecution.workflow_executions = relationship(
+    WorkflowExecution,
+    backref=backref('task_execution', remote_side=[TaskExecution.id]),
+    cascade='all, delete-orphan',
+    foreign_keys=WorkflowExecution.task_execution_id,
+    lazy='select'
+)
+
+sa.Index(
+    '%s_task_execution_id' % WorkflowExecution.__tablename__,
+    'task_execution_id'
+)
 
 # Many-to-one for 'TaskExecution' and 'WorkflowExecution'.
 
 TaskExecution.workflow_execution_id = sa.Column(
     sa.String(36),
-    sa.ForeignKey(WorkflowExecution.id)
+    sa.ForeignKey(WorkflowExecution.id, ondelete='CASCADE')
 )
 
 WorkflowExecution.task_executions = relationship(
@@ -283,22 +334,21 @@ class DelayedCall(mb.MistralModelBase):
 
     __tablename__ = 'delayed_calls_v2'
 
-    __table_args__ = (
-        sa.Index(
-            '%s_processing_execution_time' % __tablename__,
-            'processing',
-            'execution_time'
-        ),
-    )
-
     id = mb.id_column()
     factory_method_path = sa.Column(sa.String(200), nullable=True)
     target_method_name = sa.Column(sa.String(80), nullable=False)
     method_arguments = sa.Column(st.JsonDictType())
     serializers = sa.Column(st.JsonDictType())
+    key = sa.Column(sa.String(250), nullable=True)
     auth_context = sa.Column(st.JsonDictType())
     execution_time = sa.Column(sa.DateTime, nullable=False)
     processing = sa.Column(sa.Boolean, default=False, nullable=False)
+
+
+sa.Index(
+    '%s_execution_time' % DelayedCall.__tablename__,
+    DelayedCall.execution_time
+)
 
 
 class Environment(mb.MistralSecureModelBase):
@@ -318,16 +368,6 @@ class Environment(mb.MistralSecureModelBase):
     name = sa.Column(sa.String(200))
     description = sa.Column(sa.Text())
     variables = sa.Column(st.JsonDictType())
-
-
-def _get_hash_function_by(column_name):
-    def calc_hash(context):
-        d = context.current_parameters[column_name] or {}
-
-        return hashlib.sha256(json.dumps(sorted(d.items())).
-                              encode('utf-8')).hexdigest()
-
-    return calc_hash
 
 
 class CronTrigger(mb.MistralSecureModelBase):
@@ -360,7 +400,7 @@ class CronTrigger(mb.MistralSecureModelBase):
     )
     first_execution_time = sa.Column(sa.DateTime, nullable=True)
     next_execution_time = sa.Column(sa.DateTime, nullable=False)
-    workflow_name = sa.Column(sa.String(80))
+    workflow_name = sa.Column(sa.String(255))
     remaining_executions = sa.Column(sa.Integer)
 
     workflow_id = sa.Column(
@@ -394,6 +434,8 @@ class CronTrigger(mb.MistralSecureModelBase):
 # Register all hooks related to secure models.
 mb.register_secure_model_hooks()
 
+# TODO(rakhmerov): This is a bad solution. It's hard to find in the code,
+# configure flexibly etc. Fix it.
 # Register an event listener to verify that the size of all the long columns
 # affected by the user do not exceed the limit configuration.
 for attr_name in ['input', 'output', 'params', 'published']:
@@ -422,3 +464,67 @@ class ResourceMember(mb.MistralModelBase):
     project_id = sa.Column(sa.String(80), default=security.get_project_id)
     member_id = sa.Column(sa.String(80), nullable=False)
     status = sa.Column(sa.String(20), nullable=False, default="pending")
+
+
+class EventTrigger(mb.MistralSecureModelBase):
+    """Contains info about event triggers."""
+
+    __tablename__ = 'event_triggers_v2'
+
+    __table_args__ = (
+        sa.UniqueConstraint('exchange', 'topic', 'event', 'workflow_id',
+                            'project_id'),
+        sa.Index('%s_project_id_workflow_id' % __tablename__, 'project_id',
+                 'workflow_id'),
+    )
+
+    id = mb.id_column()
+    name = sa.Column(sa.String(200))
+
+    workflow_id = sa.Column(
+        sa.String(36),
+        sa.ForeignKey(WorkflowDefinition.id)
+    )
+    workflow_params = sa.Column(st.JsonDictType())
+    workflow_input = sa.Column(st.JsonDictType())
+
+    exchange = sa.Column(sa.String(80), nullable=False)
+    topic = sa.Column(sa.String(80), nullable=False)
+    event = sa.Column(sa.String(80), nullable=False)
+
+    trust_id = sa.Column(sa.String(80))
+
+
+class NamedLock(mb.MistralModelBase):
+    """Contains info about named locks.
+
+    Usage of named locks is based on properties of READ COMMITTED
+    transactions of the most generally used SQL databases such as
+    Postgres, MySQL, Oracle etc.
+
+    The locking scenario is as follows:
+    1. Transaction A (TX-A) inserts a row with unique 'id' and
+        some value that identifies a locked object stored in 'name'.
+    2. Transaction B (TX-B) and any subsequent transactions tries
+        to insert a row with unique 'id' and the same value of 'name'
+        field and it waits till TX-A is completed due to transactional
+        properties of READ COMMITTED.
+    3. If TX-A then immediately deletes the record and commits then
+        TX-B and or one of the subsequent transactions are released
+        and its 'insert' is completed.
+    4. Then the scenario repeats with step #2 where the role of TX-A
+        will be playing a transaction that just did insert.
+
+    Practically, this table should never contain any committed rows.
+    All its usage is around the play with transactional storages.
+    """
+
+    __tablename__ = 'named_locks'
+
+    sa.UniqueConstraint('name')
+
+    id = mb.id_column()
+    name = sa.Column(sa.String(250))
+
+
+sa.UniqueConstraint(NamedLock.name)

@@ -25,9 +25,9 @@ from mistral import utils
 from mistral.workbook import types
 
 
-CMD_PTRN = re.compile("^[\w\.]+[^=\s\"]*")
+CMD_PTRN = re.compile("^[\w\.]+[^=\(\s\"]*")
 
-INLINE_YAQL = expr.INLINE_YAQL_REGEXP
+EXPRESSION = '|'.join([expr.patterns[name] for name in expr.patterns])
 _ALL_IN_BRACKETS = "\[.*\]\s*"
 _ALL_IN_QUOTES = "\"[^\"]*\"\s*"
 _ALL_IN_APOSTROPHES = "'[^']*'\s*"
@@ -37,7 +37,7 @@ _FALSE = "false"
 _NULL = "null"
 
 ALL = (
-    _ALL_IN_QUOTES, _ALL_IN_APOSTROPHES, INLINE_YAQL,
+    _ALL_IN_QUOTES, _ALL_IN_APOSTROPHES, EXPRESSION,
     _ALL_IN_BRACKETS, _TRUE, _FALSE, _NULL, _DIGITS
 )
 
@@ -131,7 +131,7 @@ class BaseSpec(object):
 
     _definitions = {}
 
-    _version = '1.0'
+    _version = '2.0'
 
     @classmethod
     def get_schema(cls, includes=['meta', 'definitions']):
@@ -194,7 +194,7 @@ class BaseSpec(object):
         """
         pass
 
-    def validate_yaql_expr(self, dsl_part):
+    def validate_expr(self, dsl_part):
         if isinstance(dsl_part, six.string_types):
             expr.validate(dsl_part)
         elif isinstance(dsl_part, list):
@@ -278,9 +278,10 @@ class BaseSpec(object):
 
         params = {}
 
-        for k, v in re.findall(PARAMS_PTRN, cmd_str):
+        for match in re.findall(PARAMS_PTRN, cmd_str):
+            k = match[0]
             # Remove embracing quotes.
-            v = v.strip()
+            v = match[1].strip()
             if v[0] == '"' or v[0] == "'":
                 v = v[1:-1]
             else:
@@ -320,7 +321,7 @@ class BaseListSpec(BaseSpec):
 
         self.items = []
 
-        for k, v in six.iteritems(data):
+        for k, v in data.items():
             if k != 'version':
                 v['name'] = k
                 self._inject_version([k])
@@ -348,12 +349,12 @@ class BaseListSpec(BaseSpec):
 class BaseSpecList(object):
     item_class = None
 
-    _version = '1.0'
+    _version = '2.0'
 
     def __init__(self, data):
         self.items = {}
 
-        for k, v in six.iteritems(data):
+        for k, v in data.items():
             if k != 'version':
                 v['name'] = k
                 v['version'] = self._version

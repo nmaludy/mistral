@@ -20,7 +20,7 @@ import mock
 
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine import rpc
+from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
 from mistral.tests.unit.api import base
 from mistral.workflow import data_flow
@@ -104,6 +104,9 @@ TASK = {
     'processed': True
 }
 
+TASK_WITHOUT_RESULT = copy.deepcopy(TASK)
+del TASK_WITHOUT_RESULT['result']
+
 UPDATED_TASK_EX = copy.deepcopy(TASK_EX)
 UPDATED_TASK_EX['state'] = 'SUCCESS'
 UPDATED_TASK = copy.deepcopy(TASK)
@@ -127,7 +130,7 @@ MOCK_WF_EX = mock.MagicMock(return_value=WF_EX)
 MOCK_TASK = mock.MagicMock(return_value=TASK_EX)
 MOCK_TASKS = mock.MagicMock(return_value=[TASK_EX])
 MOCK_EMPTY = mock.MagicMock(return_value=[])
-MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundException())
+MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 MOCK_ERROR_TASK = mock.MagicMock(return_value=ERROR_TASK_EX)
 MOCK_ERROR_ITEMS_TASK = mock.MagicMock(return_value=ERROR_ITEMS_TASK_EX)
 
@@ -157,7 +160,7 @@ class TestTasksController(base.APITest):
         self.assertEqual(200, resp.status_int)
 
         self.assertEqual(1, len(resp.json['tasks']))
-        self.assertDictEqual(TASK, resp.json['tasks'][0])
+        self.assertDictEqual(TASK_WITHOUT_RESULT, resp.json['tasks'][0])
 
     @mock.patch.object(db_api, 'get_task_executions', MOCK_EMPTY)
     def test_get_all_empty(self):
@@ -184,7 +187,6 @@ class TestTasksController(base.APITest):
         self.assertDictEqual(TASK, resp.json)
 
         rpc.EngineClient.rerun_workflow.assert_called_with(
-            WF_EX.id,
             TASK_EX.id,
             reset=params['reset'],
             env=None
@@ -243,7 +245,6 @@ class TestTasksController(base.APITest):
         self.assertDictEqual(TASK, resp.json)
 
         rpc.EngineClient.rerun_workflow.assert_called_with(
-            WF_EX.id,
             TASK_EX.id,
             reset=params['reset'],
             env=json.loads(params['env'])
@@ -264,6 +265,18 @@ class TestTasksController(base.APITest):
         self.assertEqual(400, resp.status_int)
         self.assertIn('faultstring', resp.json)
         self.assertIn('execution must be in ERROR', resp.json['faultstring'])
+
+    @mock.patch.object(rpc.EngineClient, 'rerun_workflow', MOCK_WF_EX)
+    @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
+    @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)
+    def test_put_current_task_in_error(self):
+        params = copy.deepcopy(RERUN_TASK)
+        params['reset'] = True
+        params['env'] = '{"k1": "def"}'
+
+        resp = self.app.put_json('/v2/tasks/123', params=params)
+
+        self.assertEqual(200, resp.status_int)
 
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
     @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)
@@ -298,6 +311,20 @@ class TestTasksController(base.APITest):
         self.assertIn('faultstring', resp.json)
         self.assertIn('Only with-items task', resp.json['faultstring'])
 
+        @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
+        @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)
+        def test_put_valid_state(self):
+            params = copy.deepcopy(RERUN_TASK)
+            params['state'] = states.RUNNING
+            params['reset'] = True
+
+            resp = self.app.put_json(
+                '/v2/tasks/123',
+                params=params
+            )
+
+            self.assertEqual(200, resp.status_int)
+
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
     @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)
     def test_put_mismatch_task_name(self):
@@ -314,6 +341,22 @@ class TestTasksController(base.APITest):
         self.assertEqual(400, resp.status_int)
         self.assertIn('faultstring', resp.json)
         self.assertIn('Task name does not match', resp.json['faultstring'])
+
+    @mock.patch.object(rpc.EngineClient, 'rerun_workflow', MOCK_WF_EX)
+    @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
+    @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)
+    def test_put_match_task_name(self):
+        params = copy.deepcopy(RERUN_TASK)
+        params['name'] = 'task'
+        params['reset'] = True
+
+        resp = self.app.put_json(
+            '/v2/tasks/123',
+            params=params,
+            expect_errors=True
+        )
+
+        self.assertEqual(200, resp.status_int)
 
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
     @mock.patch.object(db_api, 'get_task_execution', MOCK_ERROR_TASK)

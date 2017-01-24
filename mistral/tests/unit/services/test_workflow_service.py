@@ -165,7 +165,7 @@ class WorkflowServiceTest(base.DbTestCase):
 
     def test_update_non_existing_workflow_failed(self):
         exception = self.assertRaises(
-            exc.DBEntityNotFoundException,
+            exc.DBEntityNotFoundError,
             wf_service.update_workflows,
             WORKFLOW
         )
@@ -219,13 +219,13 @@ class WorkflowServiceTest(base.DbTestCase):
                     update_env
                 )
 
-            self.assertDictEqual(update_env, updated.params['env'])
-            self.assertDictEqual(update_env, updated.context['__env'])
+                self.assertDictEqual(update_env, updated.params['env'])
+                self.assertDictEqual(update_env, updated.context['__env'])
 
-            fetched = db_api.get_workflow_execution(created.id)
+                fetched = db_api.get_workflow_execution(created.id)
 
-            self.assertEqual(updated, fetched)
-            self.assertIsNotNone(fetched.updated_at)
+                self.assertEqual(updated, fetched)
+                self.assertIsNotNone(fetched.updated_at)
 
     def test_update_workflow_execution_env_wrong_state(self):
         wf_exec_template = {

@@ -5,6 +5,7 @@ Developer's Reference
    :maxdepth: 3
 
    creating_custom_action
+   extending_yaql
    asynchronous_actions
    extending_yaql
    devstack

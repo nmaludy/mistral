@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -81,6 +79,19 @@ def JsonDictType():
 def JsonListType():
     """Returns an SQLAlchemy Column Type suitable to store a Json array."""
     return MutableList.as_mutable(JsonEncoded)
+
+
+def MediumText():
+    # TODO(rakhmerov): Need to do for postgres.
+    return sa.Text().with_variant(mysql.MEDIUMTEXT(), 'mysql')
+
+
+class JsonEncodedMediumText(JsonEncoded):
+    impl = MediumText()
+
+
+def JsonMediumDictType():
+    return mutable.MutableDict.as_mutable(JsonEncodedMediumText)
 
 
 def LongText():

@@ -60,13 +60,16 @@ class SimpleEngineCommandsTest(base.EngineTestCase):
     def test_fail(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 1})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -74,13 +77,16 @@ class SimpleEngineCommandsTest(base.EngineTestCase):
     def test_succeed(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 2})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -88,13 +94,16 @@ class SimpleEngineCommandsTest(base.EngineTestCase):
     def test_pause(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 3})
 
-        self.await_execution_paused(wf_ex.id)
+        self.await_workflow_paused(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -137,13 +146,16 @@ class SimpleEngineWorkflowLevelCommandsTest(base.EngineTestCase):
     def test_fail(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 1})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -151,13 +163,16 @@ class SimpleEngineWorkflowLevelCommandsTest(base.EngineTestCase):
     def test_succeed(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 2})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -165,13 +180,16 @@ class SimpleEngineWorkflowLevelCommandsTest(base.EngineTestCase):
     def test_pause(self):
         wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 3})
 
-        self.await_execution_paused(wf_ex.id)
+        self.await_workflow_paused(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -247,13 +265,16 @@ class OrderEngineCommandsTest(base.EngineTestCase):
     def test_fail_first(self):
         wf_ex = self.engine.start_workflow('my_wb.fail_first_wf', None)
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -261,34 +282,37 @@ class OrderEngineCommandsTest(base.EngineTestCase):
     def test_fail_second(self):
         wf_ex = self.engine.start_workflow('my_wb.fail_second_wf', None)
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(2, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(2, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
-        task2_db = self._assert_single_item(
-            wf_ex.task_executions,
-            name='task2'
-        )
+        task2_db = self._assert_single_item(task_execs, name='task2')
 
         self.await_task_success(task2_db.id)
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
     def test_succeed_first(self):
         wf_ex = self.engine.start_workflow('my_wb.succeed_first_wf', None)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(1, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
@@ -296,20 +320,200 @@ class OrderEngineCommandsTest(base.EngineTestCase):
     def test_succeed_second(self):
         wf_ex = self.engine.start_workflow('my_wb.succeed_second_wf', None)
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertEqual(2, len(wf_ex.task_executions))
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(2, len(task_execs))
         self._assert_single_item(
-            wf_ex.task_executions,
+            task_execs,
             name='task1',
             state=states.SUCCESS
         )
-        task2_db = self._assert_single_item(
-            wf_ex.task_executions,
-            name='task2'
-        )
+        task2_db = self._assert_single_item(task_execs, name='task2')
 
         self.await_task_error(task2_db.id)
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
+
+WORKBOOK4 = """
+---
+version: '2.0'
+
+name: my_wb
+
+workflows:
+  wf:
+    type: direct
+    input:
+      - my_var
+
+    tasks:
+      task1:
+        action: std.echo output='1'
+        on-complete:
+        - fail(msg='my_var value is 1'): <% $.my_var = 1 %>
+        - succeed(msg='my_var value is 2'): <% $.my_var = 2 %>
+        - pause(msg='my_var value is 3'): <% $.my_var = 3 %>
+        - task2
+
+      task2:
+        action: std.echo output='2'
+"""
+
+
+class SimpleEngineCmdsWithMsgTest(base.EngineTestCase):
+    def setUp(self):
+        super(SimpleEngineCmdsWithMsgTest, self).setUp()
+
+        wb_service.create_workbook_v2(WORKBOOK4)
+
+    def test_fail(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 1})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.ERROR, wf_ex.state)
+        self.assertEqual('my_var value is 1', wf_ex.state_info)
+
+    def test_succeed(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 2})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.SUCCESS, wf_ex.state)
+        self.assertEqual("my_var value is 2", wf_ex.state_info)
+
+    def test_pause(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 3})
+
+        self.await_workflow_paused(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.PAUSED, wf_ex.state)
+        self.assertEqual("my_var value is 3", wf_ex.state_info)
+
+WORKBOOK5 = """
+---
+version: '2.0'
+
+name: my_wb
+
+workflows:
+  wf:
+    type: direct
+    input:
+      - my_var
+
+    task-defaults:
+      on-complete:
+        - fail(msg='my_var value is 1'): <% $.my_var = 1 %>
+        - succeed(msg='my_var value is <% $.my_var %>'): <% $.my_var = 2 %>
+        - pause(msg='my_var value is 3'): <% $.my_var = 3 %>
+        - task2: <% $.my_var = 4 %> # (Never happens in this test)
+
+    tasks:
+      task1:
+        action: std.echo output='1'
+
+      task2:
+        action: std.echo output='2'
+"""
+
+
+class SimpleEngineWorkflowLevelCmdsWithMsgTest(base.EngineTestCase):
+    def setUp(self):
+        super(SimpleEngineWorkflowLevelCmdsWithMsgTest, self).setUp()
+
+        wb_service.create_workbook_v2(WORKBOOK5)
+
+    def test_fail(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 1})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.ERROR, wf_ex.state)
+        self.assertEqual("my_var value is 1", wf_ex.state_info)
+
+    def test_succeed(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 2})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.SUCCESS, wf_ex.state)
+        self.assertEqual("my_var value is 2", wf_ex.state_info)
+
+    def test_pause(self):
+        wf_ex = self.engine.start_workflow('my_wb.wf', {'my_var': 3})
+
+        self.await_workflow_paused(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        self.assertEqual(states.PAUSED, wf_ex.state)
+        self.assertEqual("my_var value is 3", wf_ex.state_info)

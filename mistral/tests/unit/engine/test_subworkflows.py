@@ -143,23 +143,29 @@ class SubworkflowsTest(base.EngineTestCase):
         )
 
         # Wait till workflow 'wf1' is completed.
-        self.await_execution_success(wf1_ex.id)
+        self.await_workflow_success(wf1_ex.id)
 
-        wf1_ex = db_api.get_workflow_execution(wf1_ex.id)
+        with db_api.transaction():
+            wf1_ex = db_api.get_workflow_execution(wf1_ex.id)
+
+            wf1_output = wf1_ex.output
 
         self.assertDictEqual(
             {'final_result': "'Bonnie & Clyde'"},
-            wf1_ex.output
+            wf1_output
         )
 
         # Wait till workflow 'wf2' is completed.
-        self.await_execution_success(wf2_ex.id)
+        self.await_workflow_success(wf2_ex.id, timeout=4)
 
-        wf2_ex = db_api.get_workflow_execution(wf2_ex.id)
+        with db_api.transaction():
+            wf2_ex = db_api.get_workflow_execution(wf2_ex.id)
+
+            wf2_output = wf2_ex.output
 
         self.assertDictEqual(
             {'slogan': "'Bonnie & Clyde' is a cool movie!"},
-            wf2_ex.output
+            wf2_output
         )
 
         # Check project_id in tasks.
@@ -181,7 +187,7 @@ class SubworkflowsTest(base.EngineTestCase):
     @mock.patch.object(std_actions.EchoAction, 'run',
                        mock.MagicMock(side_effect=exc.ActionException))
     def test_subworkflow_error(self):
-        wf2_ex = self.engine.start_workflow('wb1.wf2', None)
+        self.engine.start_workflow('wb1.wf2', None)
 
         self._await(lambda: len(db_api.get_workflow_executions()) == 2, 0.5, 5)
 
@@ -193,26 +199,28 @@ class SubworkflowsTest(base.EngineTestCase):
         wf2_ex = self._assert_single_item(wf_execs, name='wb1.wf2')
 
         # Wait till workflow 'wf1' is completed.
-        self.await_execution_error(wf1_ex.id)
+        self.await_workflow_error(wf1_ex.id)
 
         # Wait till workflow 'wf2' is completed, its state must be ERROR.
-        self.await_execution_error(wf2_ex.id)
+        self.await_workflow_error(wf2_ex.id)
 
     def test_subworkflow_yaql_error(self):
         wf_ex = self.engine.start_workflow('wb2.wf1', None)
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
         wf_execs = db_api.get_workflow_executions()
 
         self.assertEqual(2, len(wf_execs))
 
         wf2_ex = self._assert_single_item(wf_execs, name='wb2.wf2')
+
         self.assertEqual(states.ERROR, wf2_ex.state)
         self.assertIn('Can not evaluate YAQL expression', wf2_ex.state_info)
 
         # Ensure error message is bubbled up to the main workflow.
         wf1_ex = self._assert_single_item(wf_execs, name='wb2.wf1')
+
         self.assertEqual(states.ERROR, wf1_ex.state)
         self.assertIn('Can not evaluate YAQL expression', wf1_ex.state_info)
 
@@ -246,7 +254,7 @@ class SubworkflowsTest(base.EngineTestCase):
         self.assertDictContainsSubset(expected_start_params, wf1_ex.params)
 
         # Wait till workflow 'wf1' is completed.
-        self.await_execution_success(wf1_ex.id)
+        self.await_workflow_success(wf1_ex.id)
 
         # Wait till workflow 'wf2' is completed.
-        self.await_execution_success(wf2_ex.id)
+        self.await_workflow_success(wf2_ex.id)

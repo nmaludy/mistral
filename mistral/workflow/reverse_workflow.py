@@ -19,8 +19,8 @@ from mistral import exceptions as exc
 from mistral.workflow import base
 from mistral.workflow import commands
 from mistral.workflow import data_flow
+from mistral.workflow import lookup_utils
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
 
 
 class ReverseWorkflowController(base.WorkflowController):
@@ -40,23 +40,31 @@ class ReverseWorkflowController(base.WorkflowController):
 
     __workflow_type__ = "reverse"
 
-    def _find_next_commands(self, env=None):
+    def _find_next_commands(self, task_ex):
         """Finds all tasks with resolved dependencies.
 
          This method finds all tasks with resolved dependencies and
          returns them in the form of workflow commands.
         """
         cmds = super(ReverseWorkflowController, self)._find_next_commands(
-            env=env
+            task_ex
         )
+
+        # TODO(rakhmerov): Adapt reverse workflow to non-locking model.
+        # 1. Task search must use task_ex parameter.
+        # 2. When a task has more than one dependency it's possible to
+        #   get into 'phantom read' phenomena and create multiple instances
+        #   of the same task. So 'unique_key' in conjunction with 'wait_flag'
+        #   must be used to prevent this.
 
         task_specs = self._find_task_specs_with_satisfied_dependencies()
 
         return cmds + [
             commands.RunTask(
                 self.wf_ex,
+                self.wf_spec,
                 t_s,
-                self._get_task_inbound_context(t_s)
+                self.get_task_inbound_context(t_s)
             )
             for t_s in task_specs
         ]
@@ -84,13 +92,16 @@ class ReverseWorkflowController(base.WorkflowController):
         return list(
             filter(
                 lambda t_e: t_e.state == states.SUCCESS,
-                wf_utils.find_task_executions_by_specs(self.wf_ex, t_specs)
+                lookup_utils.find_task_executions_by_specs(
+                    self.wf_ex.id,
+                    t_specs
+                )
             )
         )
 
     def evaluate_workflow_final_context(self):
-        task_execs = wf_utils.find_task_executions_by_spec(
-            self.wf_ex,
+        task_execs = lookup_utils.find_task_executions_by_spec(
+            self.wf_ex.id,
             self._get_target_task_specification()
         )
 
@@ -98,13 +109,22 @@ class ReverseWorkflowController(base.WorkflowController):
         # executions for one task.
         assert len(task_execs) <= 1
 
-        return data_flow.evaluate_task_outbound_context(task_execs[0])
+        if len(task_execs) == 1:
+            return data_flow.evaluate_task_outbound_context(task_execs[0])
+        else:
+            return {}
+
+    def get_logical_task_state(self, task_ex):
+        # TODO(rakhmerov): Implement.
+        return task_ex.state, task_ex.state_info, 0
 
     def is_error_handled_for(self, task_ex):
         return task_ex.state != states.ERROR
 
     def all_errors_handled(self):
-        return len(wf_utils.find_error_task_executions(self.wf_ex)) == 0
+        task_execs = lookup_utils.find_error_task_executions(self.wf_ex.id)
+
+        return len(task_execs) == 0
 
     def _find_task_specs_with_satisfied_dependencies(self):
         """Given a target task name finds tasks with no dependencies.
@@ -127,7 +147,8 @@ class ReverseWorkflowController(base.WorkflowController):
         ]
 
     def _is_satisfied_task(self, task_spec):
-        if wf_utils.find_task_executions_by_spec(self.wf_ex, task_spec):
+        if lookup_utils.find_task_executions_by_spec(
+                self.wf_ex.id, task_spec):
             return False
 
         if not self.wf_spec.get_task_requires(task_spec):

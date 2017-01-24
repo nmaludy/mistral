@@ -64,14 +64,15 @@ class YAQLFunctionsEngineTest(engine_test_base.EngineTestCase):
 
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(
             tasks,
@@ -108,6 +109,46 @@ class YAQLFunctionsEngineTest(engine_test_base.EngineTestCase):
             task2.published
         )
 
+    def test_task_function_returns_null(self):
+        wf_text = """---
+            version: '2.0'
+
+            wf:
+              output:
+                task2: <% task(task2) %>
+                task2bool: <% task(task2) = null %>
+
+              tasks:
+                task1:
+                  action: std.noop
+                  on-success:
+                    - task2: <% false %>
+
+                task2:
+                  action: std.noop
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            self.assertDictEqual(
+                {
+                    'task2': None,
+                    'task2bool': True
+                },
+                wf_ex.output
+            )
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+
     def test_task_function_non_existing(self):
         wf_text = """---
             version: '2.0'
@@ -126,9 +167,149 @@ class YAQLFunctionsEngineTest(engine_test_base.EngineTestCase):
 
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
         self.assertEqual(states.ERROR, wf_ex.state)
         self.assertIn('non_existing_task', wf_ex.state_info)
+
+    def test_task_function_no_arguments(self):
+        wf_text = """---
+            version: '2.0'
+
+            wf:
+              tasks:
+                task1:
+                  action: std.echo output=1
+                  publish:
+                    task1_id: <% task().id %>
+                    task1_result:  <% task().result %>
+                    task1_state: <% task().state %>
+                  on-success: task2
+
+                task2:
+                  action: std.echo output=2
+                  publish:
+                    task2_id: <% task().id %>
+                    task2_result:  <% task().result %>
+                    task2_state: <% task().state %>
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task1_ex = self._assert_single_item(
+                wf_ex.task_executions, name='task1'
+            )
+            task2_ex = self._assert_single_item(
+                wf_ex.task_executions, name='task2'
+            )
+
+            self.assertDictEqual(
+                {
+                    'task1_id': task1_ex.id,
+                    'task1_result': 1,
+                    'task1_state': states.SUCCESS
+                },
+                task1_ex.published
+            )
+            self.assertDictEqual(
+                {
+                    'task2_id': task2_ex.id,
+                    'task2_result': 2,
+                    'task2_state': states.SUCCESS
+                },
+                task2_ex.published
+            )
+
+    def test_uuid_function(self):
+        wf_text = """---
+            version: '2.0'
+
+            wf:
+              tasks:
+                task1:
+                  action: std.echo output=<% uuid() %>
+                  publish:
+                    result: <% task(task1).result %>
+            """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        task_ex = task_execs[0]
+
+        result = task_ex.published['result']
+
+        self.assertIsNotNone(result)
+        self.assertEqual(36, len(result))
+        self.assertEqual(4, result.count('-'))
+
+    def test_execution_function(self):
+        wf_text = """---
+            version: '2.0'
+
+            wf:
+              input:
+                - k1
+                - k2: v2_default
+
+              tasks:
+                task1:
+                  action: std.echo output=<% execution() %>
+                  publish:
+                    result: <% task(task1).result %>
+            """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow(
+            'wf',
+            {'k1': 'v1'},
+            param1='blablabla'
+        )
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        task_ex = task_execs[0]
+
+        execution = task_ex.published['result']
+
+        self.assertIsInstance(execution, dict)
+
+        spec = execution['spec']
+
+        self.assertEqual('2.0', spec['version'])
+        self.assertEqual('wf', spec['name'])
+        self.assertIn('tasks', spec)
+        self.assertEqual(1, len(spec['tasks']))
+
+        self.assertDictEqual(
+            {
+                'k1': 'v1',
+                'k2': 'v2_default'
+            },
+            execution['input']
+        )
+
+        self.assertDictEqual({'param1': 'blablabla'}, execution['params'])

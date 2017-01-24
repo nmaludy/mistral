@@ -17,46 +17,28 @@ from oslo_log import log as logging
 from pecan import rest
 import six
 import tooz.coordination
-from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
-from mistral.api.controllers import resource
+from mistral.api import access_control as acl
+from mistral.api.controllers.v2 import resources
+# TODO(rakhmerov): invalid dependency, a REST controller must not depend on
+# a launch script.
 from mistral.cmd import launch
-from mistral import coordination
+from mistral import context
 from mistral import exceptions as exc
+from mistral.service import coordination
 from mistral.utils import rest_utils
 
 
 LOG = logging.getLogger(__name__)
 
 
-class Service(resource.Resource):
-    """Service resource."""
-
-    name = wtypes.text
-
-    type = wtypes.text
-
-    @classmethod
-    def sample(cls):
-        return cls(name='host1_1234', type='executor_group')
-
-
-class Services(resource.Resource):
-    """A collection of Services."""
-
-    services = [Service]
-
-    @classmethod
-    def sample(cls):
-        return cls(services=[Service.sample()])
-
-
 class ServicesController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
-    @wsme_pecan.wsexpose(Services)
+    @wsme_pecan.wsexpose(resources.Services)
     def get_all(self):
         """Return all services."""
+        acl.enforce('services:list', context.ctx())
 
         LOG.info("Fetch services.")
 
@@ -77,8 +59,8 @@ class ServicesController(rest.RestController):
             for group in service_group:
                 members = service_coordinator.get_members(group)
                 services_list.extend(
-                    [Service.from_dict({'type': group, 'name': member})
-                     for member in members]
+                    [resources.Service.from_dict(
+                        {'type': group, 'name': member}) for member in members]
                 )
         except tooz.coordination.ToozError as e:
             # In the scenario of network interruption or manually shutdown
@@ -88,4 +70,4 @@ class ServicesController(rest.RestController):
                 % six.text_type(e)
             )
 
-        return Services(services=services_list)
+        return resources.Services(services=services_list)

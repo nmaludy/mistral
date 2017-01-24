@@ -48,7 +48,7 @@ class ExecutionStateInfoTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('test_wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -72,7 +72,7 @@ class ExecutionStateInfoTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('test_wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -98,7 +98,7 @@ class ExecutionStateInfoTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('test_wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -133,20 +133,39 @@ class ExecutionStateInfoTest(base.EngineTestCase):
 
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.ERROR, wf_ex.state)
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
 
         self.assertEqual(states.ERROR, task_1_ex.state)
 
         task_1_action_exs = db_api.get_action_executions(
-            task_execution_id=task_1_ex.id)
+            task_execution_id=task_1_ex.id
+        )
 
         self.assertEqual(3, len(task_1_action_exs))
-        self.assertIn(task_1_action_exs[0].id, wf_ex.state_info)
-        self.assertNotIn(task_1_action_exs[1].id, wf_ex.state_info)
-        self.assertIn(task_1_action_exs[2].id, wf_ex.state_info)
+
+        error_actions = [
+            action_ex for action_ex in task_1_action_exs if
+            action_ex.state == states.ERROR
+        ]
+        self.assertEqual(2, len(error_actions))
+
+        success_actions = [
+            action_ex for action_ex in task_1_action_exs if
+            action_ex.state == states.SUCCESS
+        ]
+        self.assertEqual(1, len(success_actions))
+
+        for action_ex in error_actions:
+            self.assertIn(action_ex.id, wf_ex.state_info)
+
+        for action_ex in success_actions:
+            self.assertNotIn(action_ex.id, wf_ex.state_info)

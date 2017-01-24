@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2014 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -63,8 +61,8 @@ MOCK_TRIGGER = mock.MagicMock(return_value=TRIGGER_DB)
 MOCK_TRIGGERS = mock.MagicMock(return_value=[TRIGGER_DB])
 MOCK_DELETE = mock.MagicMock(return_value=None)
 MOCK_EMPTY = mock.MagicMock(return_value=[])
-MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundException())
-MOCK_DUPLICATE = mock.MagicMock(side_effect=exc.DBDuplicateEntryException())
+MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
+MOCK_DUPLICATE = mock.MagicMock(side_effect=exc.DBDuplicateEntryError())
 
 
 class TestCronTriggerController(base.APITest):

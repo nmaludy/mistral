@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,6 +68,7 @@ def create_context(trust_id, project_id):
             project_id=project_id,
             auth_token=client.auth_token,
             is_trust_scoped=True,
+            trust_id=trust_id,
         )
 
     return auth_ctx.MistralContext(

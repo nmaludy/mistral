@@ -13,12 +13,13 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import mock
-
 from oslo_config import cfg
 
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
+from mistral import exceptions as exc
+from mistral import expressions as expr
+from mistral.services import workbooks as wb_service
 from mistral.services import workflows as wf_service
 from mistral.tests.unit import base as test_base
 from mistral.tests.unit.engine import base as engine_test_base
@@ -64,14 +65,15 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {}, env={'from': 'Neo'})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -84,6 +86,10 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
             {'result': 'Hi, Morpheus! Your Neo.'},
             task3.published
         )
+
+        # Make sure that task inbound context doesn't contain workflow
+        # execution info.
+        self.assertNotIn('__execution', task1.in_context)
 
     def test_linear_with_branches_dataflow(self):
         linear_with_branches_wf = """---
@@ -129,14 +135,15 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {}, env={'from': 'Neo'})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -165,9 +172,19 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         self.assertDictEqual(exp_published_arr[0], task1.published)
         self.assertDictEqual(exp_published_arr[1], task2.published)
         self.assertDictEqual(exp_published_arr[2], task3.published)
-        self.assertIn(exp_published_arr[0]['progress'], notify_published_arr)
-        self.assertIn(exp_published_arr[1]['progress'], notify_published_arr)
-        self.assertIn(exp_published_arr[2]['progress'], notify_published_arr)
+
+        self.assertIn(
+            exp_published_arr[0]['progress'],
+            notify_published_arr
+        )
+        self.assertIn(
+            exp_published_arr[1]['progress'],
+            notify_published_arr
+        )
+        self.assertIn(
+            exp_published_arr[2]['progress'],
+            notify_published_arr
+        )
 
     def test_parallel_tasks(self):
         parallel_tasks_wf = """---
@@ -193,14 +210,16 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            wf_output = wf_ex.output
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         self.assertEqual(2, len(tasks))
 
@@ -213,8 +232,8 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         self.assertDictEqual({'var1': 1}, task1.published)
         self.assertDictEqual({'var2': 2}, task2.published)
 
-        self.assertEqual(1, wf_ex.output['var1'])
-        self.assertEqual(2, wf_ex.output['var2'])
+        self.assertEqual(1, wf_output['var1'])
+        self.assertEqual(2, wf_output['var2'])
 
     def test_parallel_tasks_complex(self):
         parallel_tasks_complex_wf = """---
@@ -269,14 +288,16 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            wf_output = wf_ex.output
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         self.assertEqual(6, len(tasks))
 
@@ -300,12 +321,12 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         self.assertDictEqual({'var2': 2}, task2.published)
         self.assertDictEqual({'var21': 21}, task21.published)
 
-        self.assertEqual(1, wf_ex.output['var1'])
-        self.assertEqual(12, wf_ex.output['var12'])
-        self.assertFalse('var13' in wf_ex.output)
-        self.assertEqual(14, wf_ex.output['var14'])
-        self.assertEqual(2, wf_ex.output['var2'])
-        self.assertEqual(21, wf_ex.output['var21'])
+        self.assertEqual(1, wf_output['var1'])
+        self.assertEqual(12, wf_output['var12'])
+        self.assertNotIn('var13', wf_output)
+        self.assertEqual(14, wf_output['var14'])
+        self.assertEqual(2, wf_output['var2'])
+        self.assertEqual(21, wf_output['var21'])
 
     def test_sequential_tasks_publishing_same_var(self):
         var_overwrite_wf = """---
@@ -350,14 +371,15 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
             env={'from': 'Neo'}
         )
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
-
-        tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -372,6 +394,59 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
             {'result': 'Yo, Morpheus! Neo.'},
             task4.published
         )
+
+    def test_sequential_tasks_publishing_same_structured(self):
+        var_overwrite_wf = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          tasks:
+            task1:
+              publish:
+                greeting: {"a": "b"}
+              on-success:
+                - task2
+
+            task2:
+              publish:
+                greeting: {}
+              on-success:
+                - task3
+
+            task3:
+              publish:
+                result: <% $.greeting %>
+        """
+
+        wf_service.create_workflows(var_overwrite_wf)
+
+        # Start workflow.
+        wf_ex = self.engine.start_workflow(
+            'wf',
+            {},
+            env={'from': 'Neo'}
+        )
+
+        self.await_workflow_success(wf_ex.id)
+
+        # Note: We need to reread execution to access related tasks.
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
+
+        self.assertEqual(states.SUCCESS, wf_ex.state)
+
+        task1 = self._assert_single_item(tasks, name='task1')
+        task2 = self._assert_single_item(tasks, name='task2')
+        task3 = self._assert_single_item(tasks, name='task3')
+
+        self.assertEqual(states.SUCCESS, task3.state)
+        self.assertDictEqual({'greeting': {'a': 'b'}}, task1.published)
+        self.assertDictEqual({'greeting': {}}, task2.published)
+        self.assertDictEqual({'result': {}}, task3.published)
 
     def test_linear_dataflow_implicit_publish(self):
         linear_wf = """---
@@ -409,12 +484,14 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            tasks = wf_ex.task_executions
+
         task4 = self._assert_single_item(tasks, name='task4')
 
         self.assertDictEqual(
@@ -442,16 +519,17 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            tasks = wf_ex.task_executions
 
-        task1 = self._assert_single_item(tasks, name='task1')
+            task1 = self._assert_single_item(tasks, name='task1')
 
-        result = data_flow.get_task_execution_result(task1)
+            result = data_flow.get_task_execution_result(task1)
 
         # Published vars are saved.
         self.assertDictEqual(
@@ -481,16 +559,120 @@ class DataFlowEngineTest(engine_test_base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf1_with_items', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            task1 = self._assert_single_item(
+                wf_ex.task_executions,
+                name='task1'
+            )
+
+            result = data_flow.get_task_execution_result(task1)
+
+        self.assertListEqual([], result)
+
+    def test_publish_on_error(self):
+        wf_def = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          output-on-error:
+            out: <% $.hi %>
+
+          tasks:
+            task1:
+              action: std.fail
+              publish-on-error:
+                hi: hello_from_error
+                err: <% task(task1).result %>
+        """
+
+        wf_service.create_workflows(wf_def)
+
+        # Start workflow.
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            wf_output = wf_ex.output
+            tasks = wf_ex.task_executions
+
+        self.assertEqual(states.ERROR, wf_ex.state)
+
         task1 = self._assert_single_item(tasks, name='task1')
 
-        result = data_flow.get_task_execution_result(task1)
-        self.assertListEqual([], result)
+        self.assertEqual(states.ERROR, task1.state)
+        self.assertEqual('hello_from_error', task1.published['hi'])
+        self.assertIn(
+            'Fail action expected exception',
+            task1.published['err']
+        )
+        self.assertEqual('hello_from_error', wf_output['out'])
+        self.assertIn(
+            'Fail action expected exception',
+            wf_output['result']
+        )
+
+    def test_output_on_error_wb_yaql_failed(self):
+        wb_def = """---
+            version: '2.0'
+
+            name: wb
+
+            workflows:
+              wf1:
+                type: direct
+                output-on-error:
+                    message: <% $.message %>
+
+                tasks:
+                  task1:
+                    workflow: wf2
+                    publish-on-error:
+                        message: <% task(task1).result.message %>
+
+              wf2:
+                type: direct
+                output-on-error:
+                    message: <% $.not_existing_variable %>
+
+                tasks:
+                    task1:
+                        action: std.fail
+                        publish-on-error:
+                            message: <% task(task1).result %>
+        """
+
+        wb_service.create_workbook_v2(wb_def)
+
+        # Start workflow.
+        wf_ex = self.engine.start_workflow('wb.wf1', {})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
+
+        self.assertEqual(states.ERROR, wf_ex.state)
+        self.assertIn('Failed to evaluate expression in output-on-error!',
+                      wf_ex.state_info)
+        self.assertIn('$.message', wf_ex.state_info)
+
+        task1 = self._assert_single_item(tasks, name='task1')
+
+        self.assertIn('task(task1).result.message', task1.state_info)
 
 
 class DataFlowTest(test_base.BaseTest):
@@ -501,41 +683,141 @@ class DataFlowTest(test_base.BaseTest):
                 "version": '2.0',
                 'name': 'task1',
                 'with-items': 'var in [1]',
-                'type': 'direct'
+                'type': 'direct',
+                'action': 'my_action'
             },
             runtime_context={
-                'with_items_context': {'count': 1}
+                'with_items': {'count': 1}
             }
         )
 
-        action_exs = [models.ActionExecution(
+        task_ex.action_executions = [models.ActionExecution(
             name='my_action',
             output={'result': 1},
             accepted=True,
-            runtime_context={'with_items_index': 0}
+            runtime_context={'index': 0}
         )]
 
-        with mock.patch.object(db_api, 'get_action_executions',
-                               return_value=action_exs):
-            self.assertEqual([1], data_flow.get_task_execution_result(task_ex))
+        self.assertEqual([1], data_flow.get_task_execution_result(task_ex))
 
-        action_exs.append(models.ActionExecution(
+        task_ex.action_executions.append(models.ActionExecution(
             name='my_action',
             output={'result': 1},
             accepted=True,
-            runtime_context={'with_items_index': 0}
+            runtime_context={'index': 0}
         ))
 
-        action_exs.append(models.ActionExecution(
+        task_ex.action_executions.append(models.ActionExecution(
             name='my_action',
             output={'result': 1},
             accepted=False,
-            runtime_context={'with_items_index': 0}
+            runtime_context={'index': 0}
         ))
 
-        with mock.patch.object(db_api, 'get_action_executions',
-                               return_value=action_exs):
-            self.assertEqual(
-                [1, 1],
-                data_flow.get_task_execution_result(task_ex)
-            )
+        self.assertEqual(
+            [1, 1],
+            data_flow.get_task_execution_result(task_ex)
+        )
+
+    def test_context_view(self):
+        ctx = data_flow.ContextView(
+            {
+                'k1': 'v1',
+                'k11': 'v11',
+                'k3': 'v3'
+            },
+            {
+                'k2': 'v2',
+                'k21': 'v21',
+                'k3': 'v32'
+            }
+        )
+
+        self.assertIsInstance(ctx, dict)
+        self.assertEqual(5, len(ctx))
+
+        self.assertIn('k1', ctx)
+        self.assertIn('k11', ctx)
+        self.assertIn('k3', ctx)
+        self.assertIn('k2', ctx)
+        self.assertIn('k21', ctx)
+
+        self.assertEqual('v1', ctx['k1'])
+        self.assertEqual('v1', ctx.get('k1'))
+        self.assertEqual('v11', ctx['k11'])
+        self.assertEqual('v11', ctx.get('k11'))
+        self.assertEqual('v3', ctx['k3'])
+        self.assertEqual('v2', ctx['k2'])
+        self.assertEqual('v2', ctx.get('k2'))
+        self.assertEqual('v21', ctx['k21'])
+        self.assertEqual('v21', ctx.get('k21'))
+
+        self.assertIsNone(ctx.get('Not existing key'))
+
+        self.assertRaises(exc.MistralError, ctx.update)
+        self.assertRaises(exc.MistralError, ctx.clear)
+        self.assertRaises(exc.MistralError, ctx.pop, 'k1')
+        self.assertRaises(exc.MistralError, ctx.popitem)
+        self.assertRaises(exc.MistralError, ctx.__setitem__, 'k5', 'v5')
+        self.assertRaises(exc.MistralError, ctx.__delitem__, 'k2')
+
+        self.assertEqual('v1', expr.evaluate('<% $.k1 %>', ctx))
+        self.assertEqual('v2', expr.evaluate('<% $.k2 %>', ctx))
+        self.assertEqual('v3', expr.evaluate('<% $.k3 %>', ctx))
+
+        # Now change the order of dictionaries and make sure to have
+        # a different for key 'k3'.
+        ctx = data_flow.ContextView(
+            {
+                'k2': 'v2',
+                'k21': 'v21',
+                'k3': 'v32'
+            },
+            {
+                'k1': 'v1',
+                'k11': 'v11',
+                'k3': 'v3'
+            }
+        )
+
+        self.assertEqual('v32', expr.evaluate('<% $.k3 %>', ctx))
+
+    def test_context_view_eval_root_with_yaql(self):
+        ctx = data_flow.ContextView(
+            {'k1': 'v1'},
+            {'k2': 'v2'}
+        )
+
+        res = expr.evaluate('<% $ %>', ctx)
+
+        self.assertIsNotNone(res)
+        self.assertIsInstance(res, dict)
+        self.assertEqual(2, len(res))
+
+    def test_context_view_eval_keys(self):
+        ctx = data_flow.ContextView(
+            {'k1': 'v1'},
+            {'k2': 'v2'}
+        )
+
+        res = expr.evaluate('<% $.keys() %>', ctx)
+
+        self.assertIsNotNone(res)
+        self.assertIsInstance(res, list)
+        self.assertEqual(2, len(res))
+        self.assertIn('k1', res)
+        self.assertIn('k2', res)
+
+    def test_context_view_eval_values(self):
+        ctx = data_flow.ContextView(
+            {'k1': 'v1'},
+            {'k2': 'v2'}
+        )
+
+        res = expr.evaluate('<% $.values() %>', ctx)
+
+        self.assertIsNotNone(res)
+        self.assertIsInstance(res, list)
+        self.assertEqual(2, len(res))
+        self.assertIn('v1', res)
+        self.assertIn('v2', res)

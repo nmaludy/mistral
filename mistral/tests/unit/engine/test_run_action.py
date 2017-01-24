@@ -44,6 +44,47 @@ class RunActionEngineTest(base.EngineTestCase):
           input:
             - left
             - right
+
+        concat3:
+          base: concat
+          base-input:
+            left: <% $.left %><% $.center %>
+            right: <% $.right %>
+          input:
+            - left
+            - center
+            - right
+
+        concat4:
+          base: concat3
+          base-input:
+            left: <% $.left %>
+            center: <% $.center_left %><% $.center_right %>
+            right: <% $.right %>
+          input:
+            - left
+            - center_left
+            - center_right
+            - right
+
+        missing_base:
+          base: wrong
+          input:
+            - some_input
+
+        loop_action:
+          base: loop_action
+          base-input:
+            output: <% $.output %>
+          input:
+            - output
+
+        level2_loop_action:
+          base: loop_action
+          base-input:
+            output: <% $.output %>
+          input:
+            - output
         """
         actions.create_actions(action)
 
@@ -55,6 +96,7 @@ class RunActionEngineTest(base.EngineTestCase):
         action_ex = self.engine.start_action('std.echo', {'output': 'Hello!'})
 
         self.assertEqual('Hello!', action_ex.output['result'])
+        self.assertEqual(states.SUCCESS, action_ex.state)
 
     @mock.patch.object(
         std_actions.EchoAction,
@@ -65,7 +107,9 @@ class RunActionEngineTest(base.EngineTestCase):
         # Start action and see the result.
         action_ex = self.engine.start_action('std.echo', {'output': 'Hello!'})
 
+        self.assertIsNotNone(action_ex.output)
         self.assertIn('some error', action_ex.output['result'])
+        self.assertEqual(states.ERROR, action_ex.state)
 
     def test_run_action_save_result(self):
         # Start action.
@@ -77,10 +121,50 @@ class RunActionEngineTest(base.EngineTestCase):
 
         self.await_action_success(action_ex.id)
 
-        action_ex = db_api.get_action_execution(action_ex.id)
+        with db_api.transaction():
+            action_ex = db_api.get_action_execution(action_ex.id)
 
+            self.assertEqual(states.SUCCESS, action_ex.state)
+            self.assertEqual({'result': 'Hello!'}, action_ex.output)
+
+    def test_run_action_run_sync(self):
+        # Start action.
+        action_ex = self.engine.start_action(
+            'std.echo',
+            {'output': 'Hello!'},
+            run_sync=True
+        )
+
+        self.assertEqual('Hello!', action_ex.output['result'])
         self.assertEqual(states.SUCCESS, action_ex.state)
-        self.assertEqual({'result': 'Hello!'}, action_ex.output)
+
+    def test_run_action_save_result_and_run_sync(self):
+        # Start action.
+        action_ex = self.engine.start_action(
+            'std.echo',
+            {'output': 'Hello!'},
+            save_result=True,
+            run_sync=True
+        )
+
+        self.assertEqual('Hello!', action_ex.output['result'])
+        self.assertEqual(states.SUCCESS, action_ex.state)
+
+        with db_api.transaction():
+            action_ex = db_api.get_action_execution(action_ex.id)
+
+            self.assertEqual(states.SUCCESS, action_ex.state)
+            self.assertEqual({'result': 'Hello!'}, action_ex.output)
+
+    def test_run_action_run_sync_error(self):
+        # Start action.
+        self.assertRaises(
+            exc.InputException,
+            self.engine.start_action,
+            'std.async_noop',
+            {},
+            run_sync=True
+        )
 
     def test_run_action_async(self):
         action_ex = self.engine.start_action('std.async_noop', {})
@@ -99,10 +183,11 @@ class RunActionEngineTest(base.EngineTestCase):
 
         self.await_action_error(action_ex.id)
 
-        action_ex = db_api.get_action_execution(action_ex.id)
+        with db_api.transaction():
+            action_ex = db_api.get_action_execution(action_ex.id)
 
-        self.assertEqual(states.ERROR, action_ex.state)
-        self.assertIn('Invoke failed.', action_ex.output.get('result', ''))
+            self.assertEqual(states.ERROR, action_ex.state)
+            self.assertIn('Invoke failed.', action_ex.output.get('result', ''))
 
     @mock.patch.object(
         std_actions.AsyncNoOpAction, 'run',
@@ -112,10 +197,11 @@ class RunActionEngineTest(base.EngineTestCase):
 
         self.await_action_error(action_ex.id)
 
-        action_ex = db_api.get_action_execution(action_ex.id)
+        with db_api.transaction():
+            action_ex = db_api.get_action_execution(action_ex.id)
 
-        self.assertEqual(states.ERROR, action_ex.state)
-        self.assertIn('Invoke erred.', action_ex.output.get('result', ''))
+            self.assertEqual(states.ERROR, action_ex.state)
+            self.assertIn('Invoke erred.', action_ex.output.get('result', ''))
 
     def test_run_action_adhoc(self):
         # Start action and see the result.
@@ -125,6 +211,56 @@ class RunActionEngineTest(base.EngineTestCase):
         )
 
         self.assertEqual('Hello, John Doe!', action_ex.output['result'])
+
+    def test_run_level_two_action_adhoc(self):
+        # Start action and see the result.
+        action_ex = self.engine.start_action(
+            'concat3',
+            {'left': 'Hello, ', 'center': 'John', 'right': ' Doe!'}
+        )
+
+        self.assertEqual('Hello, John Doe!', action_ex.output['result'])
+
+    def test_run_level_three_action_adhoc(self):
+        # Start action and see the result.
+        action_ex = self.engine.start_action(
+            'concat4',
+            {
+                'left': 'Hello, ',
+                'center_left': 'John',
+                'center_right': ' Doe',
+                'right': '!'
+            }
+        )
+
+        self.assertEqual('Hello, John Doe!', action_ex.output['result'])
+
+    def test_run_action_with_missing_base(self):
+        # Start action and see the result.
+        self.assertRaises(
+            exc.DBEntityNotFoundError,
+            self.engine.start_action,
+            'missing_base',
+            {'some_input': 'Hi'}
+        )
+
+    def test_run_loop_action(self):
+        # Start action and see the result.
+        self.assertRaises(
+            ValueError,
+            self.engine.start_action,
+            'loop_action',
+            {'output': 'Hello'}
+        )
+
+    def test_run_level_two_loop_action(self):
+        # Start action and see the result.
+        self.assertRaises(
+            ValueError,
+            self.engine.start_action,
+            'level2_loop_action',
+            {'output': 'Hello'}
+        )
 
     def test_run_action_wrong_input(self):
         # Start action and see the result.
@@ -148,10 +284,15 @@ class RunActionEngineTest(base.EngineTestCase):
 
         self.assertIn('concat', exception.message)
 
-    @mock.patch('mistral.engine.action_handler.resolve_action_definition')
+    # TODO(rakhmerov): This is an example of a bad test. It pins to
+    # implementation details too much and prevents from making refactoring
+    # easily. When writing tests we should make assertions about
+    # consequences, not about how internal machinery works, i.e. we need to
+    # follow "black box" testing paradigm.
+    @mock.patch('mistral.engine.actions.resolve_action_definition')
     @mock.patch('mistral.engine.utils.validate_input')
     @mock.patch('mistral.services.action_manager.get_action_class')
-    @mock.patch('mistral.engine.action_handler.run_action')
+    @mock.patch('mistral.engine.actions.PythonAction.run')
     def test_run_action_with_kwargs_input(self, run_mock, class_mock,
                                           validate_mock, def_mock):
         action_def = models.ActionDefinition()
@@ -165,23 +306,22 @@ class RunActionEngineTest(base.EngineTestCase):
             'scope': 'public'
         })
         def_mock.return_value = action_def
-        run_mock.return_value = {'result': 'Hello'}
+        run_mock.return_value = wf_utils.Result(data='Hello')
 
         class_ret = mock.MagicMock()
         class_mock.return_value = class_ret
 
         self.engine.start_action('fake_action', {'input': 'Hello'})
 
-        self.assertEqual(2, def_mock.call_count)
-        def_mock.assert_called_with('fake_action', None, None)
+        self.assertEqual(1, def_mock.call_count)
+        def_mock.assert_called_with('fake_action')
 
         self.assertEqual(0, validate_mock.call_count)
 
         class_ret.assert_called_once_with(input='Hello')
 
         run_mock.assert_called_once_with(
-            action_def,
             {'input': 'Hello'},
-            target=None,
-            async=False
+            None,
+            save=False
         )

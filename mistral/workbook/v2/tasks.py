@@ -19,15 +19,15 @@ import re
 import six
 
 from mistral import exceptions as exc
-from mistral import expressions as expr
+from mistral import expressions
 from mistral import utils
 from mistral.workbook import types
 from mistral.workbook.v2 import base
 from mistral.workbook.v2 import policies
 
-
+_expr_ptrns = [expressions.patterns[name] for name in expressions.patterns]
 WITH_ITEMS_PTRN = re.compile(
-    "\s*([\w\d_\-]+)\s*in\s*(\[.+\]|%s)" % expr.INLINE_YAQL_REGEXP
+    "\s*([\w\d_\-]+)\s*in\s*(\[.+\]|%s)" % '|'.join(_expr_ptrns)
 )
 RESERVED_TASK_NAMES = [
     'noop',
@@ -55,6 +55,7 @@ class TaskSpec(base.BaseSpec):
                 ]
             },
             "publish": types.NONEMPTY_DICT,
+            "publish-on-error": types.NONEMPTY_DICT,
             "retry": policies.RETRY_SCHEMA,
             "wait-before": policies.WAIT_BEFORE_SCHEMA,
             "wait-after": policies.WAIT_AFTER_SCHEMA,
@@ -62,7 +63,8 @@ class TaskSpec(base.BaseSpec):
             "pause-before": policies.PAUSE_BEFORE_SCHEMA,
             "concurrency": policies.CONCURRENCY_SCHEMA,
             "target": types.NONEMPTY_STRING,
-            "keep-result": types.YAQL_OR_BOOLEAN
+            "keep-result": types.EXPRESSION_OR_BOOLEAN,
+            "safe-rerun": types.EXPRESSION_OR_BOOLEAN
         },
         "additionalProperties": False,
         "anyOf": [
@@ -97,6 +99,7 @@ class TaskSpec(base.BaseSpec):
         self._input = data.get('input', {})
         self._with_items = self._transform_with_items()
         self._publish = data.get('publish', {})
+        self._publish_on_error = data.get('publish-on-error', {})
         self._policies = self._group_spec(
             policies.PoliciesSpec,
             'retry',
@@ -108,6 +111,7 @@ class TaskSpec(base.BaseSpec):
         )
         self._target = data.get('target')
         self._keep_result = data.get('keep-result', True)
+        self._safe_rerun = data.get('safe-rerun', False)
 
         self._process_action_and_workflow()
 
@@ -120,11 +124,12 @@ class TaskSpec(base.BaseSpec):
         # Validate YAQL expressions.
         if action or workflow:
             inline_params = self._parse_cmd_and_input(action or workflow)[1]
-            self.validate_yaql_expr(inline_params)
+            self.validate_expr(inline_params)
 
-        self.validate_yaql_expr(self._data.get('input', {}))
-        self.validate_yaql_expr(self._data.get('publish', {}))
-        self.validate_yaql_expr(self._data.get('keep-result', {}))
+        self.validate_expr(self._data.get('input', {}))
+        self.validate_expr(self._data.get('publish', {}))
+        self.validate_expr(self._data.get('keep-result', {}))
+        self.validate_expr(self._data.get('safe-rerun', {}))
 
     def _transform_with_items(self):
         raw = self._data.get('with-items', [])
@@ -146,11 +151,13 @@ class TaskSpec(base.BaseSpec):
                        "%s" % self._data)
                 raise exc.InvalidModelException(msg)
 
-            var_name, array = match.groups()
+            match_groups = match.groups()
+            var_name = match_groups[0]
+            array = match_groups[1]
 
             # Validate YAQL expression that may follow after "in" for the
             # with-items syntax "var in {[some, list] | <% $.array %> }".
-            self.validate_yaql_expr(array)
+            self.validate_expr(array)
 
             if array.startswith('['):
                 try:
@@ -183,9 +190,6 @@ class TaskSpec(base.BaseSpec):
     def get_description(self):
         return self._description
 
-    def get_type(self):
-        return self._type
-
     def get_action_name(self):
         return self._action if self._action else None
 
@@ -207,8 +211,19 @@ class TaskSpec(base.BaseSpec):
     def get_publish(self):
         return self._publish
 
+    def get_publish_on_error(self):
+        return self._publish_on_error
+
     def get_keep_result(self):
         return self._keep_result
+
+    def get_safe_rerun(self):
+        return self._safe_rerun
+
+    def get_type(self):
+        if self._workflow:
+            return utils.WORKFLOW_TASK_TYPE
+        return utils.ACTION_TASK_TYPE
 
 
 class DirectWorkflowTaskSpec(TaskSpec):
@@ -217,7 +232,7 @@ class DirectWorkflowTaskSpec(TaskSpec):
     _on_clause_type = {
         "oneOf": [
             types.NONEMPTY_STRING,
-            types.UNIQUE_STRING_OR_YAQL_CONDITION_LIST
+            types.UNIQUE_STRING_OR_EXPRESSION_CONDITION_LIST
         ]
     }
 
@@ -244,9 +259,15 @@ class DirectWorkflowTaskSpec(TaskSpec):
         super(DirectWorkflowTaskSpec, self).__init__(data)
 
         self._join = data.get('join')
-        self._on_complete = self._as_list_of_tuples('on-complete')
-        self._on_success = self._as_list_of_tuples('on-success')
-        self._on_error = self._as_list_of_tuples('on-error')
+        self._on_complete = self.prepare_on_clause(
+            self._as_list_of_tuples('on-complete')
+        )
+        self._on_success = self.prepare_on_clause(
+            self._as_list_of_tuples('on-success')
+        )
+        self._on_error = self.prepare_on_clause(
+            self._as_list_of_tuples('on-error')
+        )
 
     def validate_schema(self):
         super(DirectWorkflowTaskSpec, self).validate_schema()
@@ -259,8 +280,18 @@ class DirectWorkflowTaskSpec(TaskSpec):
     def _validate_transitions(self, on_clause):
         val = self._data.get(on_clause, [])
 
-        [self.validate_yaql_expr(t)
+        [self.validate_expr(t)
          for t in ([val] if isinstance(val, six.string_types) else val)]
+
+    @staticmethod
+    def prepare_on_clause(list_of_tuples):
+        for i, task in enumerate(list_of_tuples):
+            task_name, params = DirectWorkflowTaskSpec._parse_cmd_and_input(
+                task[0]
+            )
+            list_of_tuples[i] = (task_name, task[1], params)
+
+        return list_of_tuples
 
     def get_join(self):
         return self._join

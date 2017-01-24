@@ -15,6 +15,7 @@
 
 from oslo_utils import uuidutils
 import six
+import threading
 
 from mistral import exceptions as exc
 from mistral import utils
@@ -39,6 +40,7 @@ class WorkflowSpec(base.BaseSpec):
             "task-defaults": _task_defaults_schema,
             "input": types.UNIQUE_STRING_OR_ONE_KEY_DICT_LIST,
             "output": types.NONEMPTY_DICT,
+            "output-on-error": types.NONEMPTY_DICT,
             "vars": types.NONEMPTY_DICT
         },
         "required": ["tasks"],
@@ -54,6 +56,7 @@ class WorkflowSpec(base.BaseSpec):
         self._type = data['type'] if 'type' in data else 'direct'
         self._input = utils.get_input_dict(data.get('input', []))
         self._output = data.get('output', {})
+        self._output_on_error = data.get('output-on-error', {})
         self._vars = data.get('vars', {})
 
         self._task_defaults = self._spec_property(
@@ -76,9 +79,9 @@ class WorkflowSpec(base.BaseSpec):
                 "Workflow doesn't have any tasks [data=%s]" % self._data
             )
 
-        # Validate YAQL expressions.
-        self.validate_yaql_expr(self._data.get('output', {}))
-        self.validate_yaql_expr(self._data.get('vars', {}))
+        # Validate expressions.
+        self.validate_expr(self._data.get('output', {}))
+        self.validate_expr(self._data.get('vars', {}))
 
     def validate_semantics(self):
         super(WorkflowSpec, self).validate_semantics()
@@ -121,6 +124,9 @@ class WorkflowSpec(base.BaseSpec):
     def get_output(self):
         return self._output
 
+    def get_output_on_error(self):
+        return self._output_on_error
+
     def get_vars(self):
         return self._vars
 
@@ -129,6 +135,9 @@ class WorkflowSpec(base.BaseSpec):
 
     def get_tasks(self):
         return self._tasks
+
+    def get_task(self, name):
+        return self._tasks[name]
 
 
 class DirectWorkflowSpec(WorkflowSpec):
@@ -146,6 +155,18 @@ class DirectWorkflowSpec(WorkflowSpec):
             },
         }
     }
+
+    def __init__(self, data):
+        super(DirectWorkflowSpec, self).__init__(data)
+
+        # Init simple dictionary based caches for inbound and
+        # outbound task specifications. In fact, we don't need
+        # any special cache implementations here because these
+        # structures can't grow indefinitely.
+        self.inbound_tasks_cache_lock = threading.RLock()
+        self.inbound_tasks_cache = {}
+        self.outbound_tasks_cache_lock = threading.RLock()
+        self.outbound_tasks_cache = {}
 
     def validate_semantics(self):
         super(DirectWorkflowSpec, self).validate_semantics()
@@ -208,16 +229,42 @@ class DirectWorkflowSpec(WorkflowSpec):
         ]
 
     def find_inbound_task_specs(self, task_spec):
-        return [
+        task_name = task_spec.get_name()
+
+        with self.inbound_tasks_cache_lock:
+            specs = self.inbound_tasks_cache.get(task_name)
+
+        if specs is not None:
+            return specs
+
+        specs = [
             t_s for t_s in self.get_tasks()
-            if self.transition_exists(t_s.get_name(), task_spec.get_name())
+            if self.transition_exists(t_s.get_name(), task_name)
         ]
 
+        with self.inbound_tasks_cache_lock:
+            self.inbound_tasks_cache[task_name] = specs
+
+        return specs
+
     def find_outbound_task_specs(self, task_spec):
-        return [
+        task_name = task_spec.get_name()
+
+        with self.outbound_tasks_cache_lock:
+            specs = self.outbound_tasks_cache.get(task_name)
+
+        if specs is not None:
+            return specs
+
+        specs = [
             t_s for t_s in self.get_tasks()
-            if self.transition_exists(task_spec.get_name(), t_s.get_name())
+            if self.transition_exists(task_name, t_s.get_name())
         ]
+
+        with self.outbound_tasks_cache_lock:
+            self.outbound_tasks_cache[task_name] = specs
+
+        return specs
 
     def has_inbound_transitions(self, task_spec):
         return len(self.find_inbound_task_specs(task_spec)) > 0
@@ -288,7 +335,7 @@ class DirectWorkflowSpec(WorkflowSpec):
 
     @staticmethod
     def _remove_task_from_clause(on_clause, t_name):
-        return list(filter(lambda tup: tup[0] != t_name, on_clause))
+        return list([tup for tup in on_clause if tup[0] != t_name])
 
 
 class ReverseWorkflowSpec(WorkflowSpec):

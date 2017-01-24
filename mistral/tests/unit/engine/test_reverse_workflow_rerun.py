@@ -89,44 +89,55 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
 
         # Run workflow and fail task.
         wf_ex = self.engine.start_workflow('wb1.wf1', {}, task_name='t3')
-        self.await_execution_error(wf_ex.id)
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.ERROR, wf_ex.state)
         self.assertIsNotNone(wf_ex.state_info)
-        self.assertEqual(2, len(wf_ex.task_executions))
+        self.assertEqual(2, len(task_execs))
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
-        task_2_ex = self._assert_single_item(wf_ex.task_executions, name='t2')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
+        task_2_ex = self._assert_single_item(task_execs, name='t2')
 
         self.assertEqual(states.SUCCESS, task_1_ex.state)
         self.assertEqual(states.ERROR, task_2_ex.state)
         self.assertIsNotNone(task_2_ex.state_info)
 
         # Resume workflow and re-run failed task.
-        self.engine.rerun_workflow(wf_ex.id, task_2_ex.id)
+        self.engine.rerun_workflow(task_2_ex.id)
+
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
         self.assertEqual(states.RUNNING, wf_ex.state)
         self.assertIsNone(wf_ex.state_info)
 
         # Wait for the workflow to succeed.
-        self.await_execution_success(wf_ex.id)
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
         self.assertIsNone(wf_ex.state_info)
-        self.assertEqual(3, len(wf_ex.task_executions))
+        self.assertEqual(3, len(task_execs))
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
-        task_2_ex = self._assert_single_item(wf_ex.task_executions, name='t2')
-        task_3_ex = self._assert_single_item(wf_ex.task_executions, name='t3')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
+        task_2_ex = self._assert_single_item(task_execs, name='t2')
+        task_3_ex = self._assert_single_item(task_execs, name='t3')
 
         # Check action executions of task 1.
         self.assertEqual(states.SUCCESS, task_1_ex.state)
 
         task_1_action_exs = db_api.get_action_executions(
-            task_execution_id=task_1_ex.id)
+            task_execution_id=task_1_ex.id
+        )
 
         self.assertEqual(1, len(task_1_action_exs))
         self.assertEqual(states.SUCCESS, task_1_action_exs[0].state)
@@ -136,17 +147,31 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
         self.assertIsNone(task_2_ex.state_info)
 
         task_2_action_exs = db_api.get_action_executions(
-            task_execution_id=task_2_ex.id)
+            task_execution_id=task_2_ex.id
+        )
 
         self.assertEqual(2, len(task_2_action_exs))
-        self.assertEqual(states.ERROR, task_2_action_exs[0].state)
-        self.assertEqual(states.SUCCESS, task_2_action_exs[1].state)
+
+        # Check there is exactly 1 action in Success and 1 in Error state.
+        # Order doesn't matter.
+        self.assertEqual(
+            1,
+            len([act_ex for act_ex in task_2_action_exs
+                 if act_ex.state == states.SUCCESS])
+        )
+
+        self.assertEqual(
+            1,
+            len([act_ex for act_ex in task_2_action_exs
+                 if act_ex.state == states.ERROR])
+        )
 
         # Check action executions of task 3.
         self.assertEqual(states.SUCCESS, task_3_ex.state)
 
         task_3_action_exs = db_api.get_action_executions(
-            task_execution_id=task_3_ex.id)
+            task_execution_id=task_3_ex.id
+        )
 
         self.assertEqual(1, len(task_3_action_exs))
         self.assertEqual(states.SUCCESS, task_3_action_exs[0].state)
@@ -180,17 +205,21 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
             env=env
         )
 
-        self.await_execution_error(wf_ex.id)
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.ERROR, wf_ex.state)
         self.assertIsNotNone(wf_ex.state_info)
-        self.assertEqual(2, len(wf_ex.task_executions))
+        self.assertEqual(2, len(task_execs))
         self.assertDictEqual(env, wf_ex.params['env'])
         self.assertDictEqual(env, wf_ex.context['__env'])
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
-        task_2_ex = self._assert_single_item(wf_ex.task_executions, name='t2')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
+        task_2_ex = self._assert_single_item(task_execs, name='t2')
 
         self.assertEqual(states.SUCCESS, task_1_ex.state)
         self.assertEqual(states.ERROR, task_2_ex.state)
@@ -203,7 +232,8 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
         }
 
         # Resume workflow and re-run failed task.
-        self.engine.rerun_workflow(wf_ex.id, task_2_ex.id, env=updated_env)
+        self.engine.rerun_workflow(task_2_ex.id, env=updated_env)
+
         wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
         self.assertEqual(states.RUNNING, wf_ex.state)
@@ -212,22 +242,27 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
         self.assertDictEqual(updated_env, wf_ex.context['__env'])
 
         # Wait for the workflow to succeed.
-        self.await_execution_success(wf_ex.id)
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.SUCCESS, wf_ex.state)
         self.assertIsNone(wf_ex.state_info)
-        self.assertEqual(3, len(wf_ex.task_executions))
+        self.assertEqual(3, len(task_execs))
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
-        task_2_ex = self._assert_single_item(wf_ex.task_executions, name='t2')
-        task_3_ex = self._assert_single_item(wf_ex.task_executions, name='t3')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
+        task_2_ex = self._assert_single_item(task_execs, name='t2')
+        task_3_ex = self._assert_single_item(task_execs, name='t3')
 
         # Check action executions of task 1.
         self.assertEqual(states.SUCCESS, task_1_ex.state)
 
         task_1_action_exs = db_api.get_action_executions(
-            task_execution_id=task_1_ex.id)
+            task_execution_id=task_1_ex.id
+        )
 
         self.assertEqual(1, len(task_1_action_exs))
         self.assertEqual(states.SUCCESS, task_1_action_exs[0].state)
@@ -242,19 +277,37 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
         self.assertIsNone(task_2_ex.state_info)
 
         task_2_action_exs = db_api.get_action_executions(
-            task_execution_id=task_2_ex.id)
-
-        self.assertEqual(2, len(task_2_action_exs))
-        self.assertEqual(states.ERROR, task_2_action_exs[0].state)
-        self.assertEqual(states.SUCCESS, task_2_action_exs[1].state)
-
-        self.assertDictEqual(
-            {'output': env['var1']},
-            task_2_action_exs[0].input
+            task_execution_id=task_2_ex.id
         )
 
-        self.assertDictEqual(
-            {'output': updated_env['var1']},
+        self.assertEqual(2, len(task_2_action_exs))
+
+        # Assert that one action ex is in error and one in success states.
+        self.assertIn(
+            task_2_action_exs[0].state,
+            [states.ERROR, states.SUCCESS]
+        )
+        self.assertIn(
+            task_2_action_exs[1].state,
+            [states.ERROR, states.SUCCESS]
+        )
+        self.assertNotEqual(
+            task_2_action_exs[0].state,
+            task_2_action_exs[1].state
+        )
+
+        # Assert that one action ex got first env and one got second env
+        self.assertIn(
+            task_2_action_exs[0].input['output'],
+            [env['var1'], updated_env['var1']]
+        )
+        self.assertIn(
+            task_2_action_exs[1].input['output'],
+            [env['var1'], updated_env['var1']]
+        )
+
+        self.assertNotEqual(
+            task_2_action_exs[0].input,
             task_2_action_exs[1].input
         )
 
@@ -262,7 +315,8 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
         self.assertEqual(states.SUCCESS, task_3_ex.state)
 
         task_3_action_exs = db_api.get_action_executions(
-            task_execution_id=task_3_ex.id)
+            task_execution_id=task_3_ex.id
+        )
 
         self.assertEqual(1, len(task_3_action_exs))
         self.assertEqual(states.SUCCESS, task_3_action_exs[0].state)
@@ -287,15 +341,20 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
 
         # Run workflow and fail task.
         wf_ex = self.engine.start_workflow('wb1.wf1', {}, task_name='t3')
-        self.await_execution_error(wf_ex.id)
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
 
         self.assertEqual(states.ERROR, wf_ex.state)
         self.assertIsNotNone(wf_ex.state_info)
-        self.assertEqual(2, len(wf_ex.task_executions))
+        self.assertEqual(2, len(task_execs))
 
-        task_1_ex = self._assert_single_item(wf_ex.task_executions, name='t1')
-        task_2_ex = self._assert_single_item(wf_ex.task_executions, name='t2')
+        task_1_ex = self._assert_single_item(task_execs, name='t1')
+        task_2_ex = self._assert_single_item(task_execs, name='t2')
 
         self.assertEqual(states.SUCCESS, task_1_ex.state)
         self.assertEqual(states.ERROR, task_2_ex.state)
@@ -303,9 +362,8 @@ class ReverseWorkflowRerunTest(base.EngineTestCase):
 
         # Resume workflow and re-run failed task.
         e = self.assertRaises(
-            exc.EngineException,
+            exc.MistralError,
             self.engine.rerun_workflow,
-            wf_ex.id,
             task_1_ex.id
         )
 

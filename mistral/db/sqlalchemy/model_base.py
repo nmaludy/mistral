@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +58,9 @@ class _MistralModelBase(oslo_models.ModelBase, oslo_models.TimestampMixin):
 
         return True
 
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
     def to_dict(self):
         """sqlalchemy based automatic to_dict method."""
         d = {}
@@ -119,6 +120,8 @@ class MistralSecureModelBase(MistralModelBase):
 
     scope = sa.Column(sa.String(80), default='private')
     project_id = sa.Column(sa.String(80), default=security.get_project_id)
+    created_at = sa.Column(sa.DateTime, default=lambda: utils.utc_now_sec())
+    updated_at = sa.Column(sa.DateTime, onupdate=lambda: utils.utc_now_sec())
 
 
 def _set_project_id(target, value, oldvalue, initiator):

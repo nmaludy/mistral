@@ -39,10 +39,9 @@ def get_mapping():
                 delete_comment(value)
         if '_comment' in map_part:
             del map_part['_comment']
-
-    mapping = json.loads(open(pkg.resource_filename(
-                         version.version_info.package,
-                         MAPPING_PATH)).read())
+    package = version.version_info.package
+    with open(pkg.resource_filename(package, MAPPING_PATH)) as fh:
+        mapping = json.load(fh)
 
     for k, v in mapping.items():
         if isinstance(v, dict):
@@ -85,7 +84,8 @@ class OpenStackActionGenerator(action_generator.ActionGenerator):
             try:
                 client_method = clazz.get_fake_client_method()
             except Exception as e:
-                LOG.debug("Failed to get fake client method: %s" % e)
+                LOG.warning("Failed to create action: %s.%s %s" %
+                            (cls.action_namespace, action_name, e))
                 client_method = None
 
             if client_method:

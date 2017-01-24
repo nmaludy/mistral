@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
 #    You may obtain a copy of the License at
@@ -38,8 +36,9 @@ PKI_TOKEN_VERIFIED = {
         'methods': ['password'],
         'roles': [{'id': uuid.uuid4().hex,
                    'name': 'admin'}],
-        'expires_at': timeutils.isotime(datetime.datetime.utcnow() +
-                                        datetime.timedelta(seconds=60)),
+        'expires_at': datetime.datetime.isoformat(
+            datetime.datetime.utcnow() + datetime.timedelta(seconds=60)
+        ),
         'project': {
             'domain': {'id': 'default', 'name': 'Default'},
             'id': uuid.uuid4().hex,
@@ -52,7 +51,7 @@ PKI_TOKEN_VERIFIED = {
             'id': uuid.uuid4().hex,
             'name': 'admin'
         },
-        'issued_at': timeutils.isotime()
+        'issued_at': datetime.datetime.isoformat(timeutils.utcnow())
     }
 }
 

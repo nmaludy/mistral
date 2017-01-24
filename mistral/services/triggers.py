@@ -12,11 +12,13 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-from croniter import croniter
+import croniter
 import datetime
 import six
+import time
 
 from mistral.db.v2 import api as db_api
+from mistral.engine.rpc_backend import rpc
 from mistral.engine import utils as eng_utils
 from mistral import exceptions as exc
 from mistral.services import security
@@ -24,14 +26,19 @@ from mistral.workbook import parser
 
 
 def get_next_execution_time(pattern, start_time):
-    return croniter(pattern, start_time).get_next(datetime.datetime)
+    local_time = croniter.croniter(pattern, start_time).get_next(
+        datetime.datetime
+    )
+    epoch_second = time.mktime(local_time.timetuple())
+    utc_time = datetime.datetime.utcfromtimestamp(epoch_second)
+    return utc_time
 
 
 # Triggers v2.
 
 def get_next_cron_triggers():
     return db_api.get_next_cron_triggers(
-        datetime.datetime.now() + datetime.timedelta(0, 2)
+        datetime.datetime.utcnow() + datetime.timedelta(0, 2)
     )
 
 
@@ -41,7 +48,10 @@ def validate_cron_trigger_input(pattern, first_time, count):
             'Pattern or first_execution_time must be specified.'
         )
     if first_time:
-        if (datetime.datetime.now() + datetime.timedelta(0, 60)) > first_time:
+        first_second = time.mktime(first_time.timetuple())
+        first_utc_time = datetime.datetime.utcfromtimestamp(first_second)
+        sum_time = datetime.datetime.utcnow() + datetime.timedelta(0, 60)
+        if sum_time > first_utc_time:
             raise exc.InvalidModelException(
                 'first_execution_time must be at least 1 minute in the future.'
             )
@@ -51,7 +61,7 @@ def validate_cron_trigger_input(pattern, first_time, count):
             )
     if pattern:
         try:
-            croniter(pattern)
+            croniter.croniter(pattern)
         except (ValueError, KeyError):
             raise exc.InvalidModelException(
                 'The specified pattern is not valid: {}'.format(pattern)
@@ -75,8 +85,12 @@ def create_cron_trigger(name, workflow_name, workflow_input,
 
     validate_cron_trigger_input(pattern, first_time, count)
 
+    first_utc_time = first_time
+
     if first_time:
-        next_time = first_time
+        first_second = time.mktime(first_time.timetuple())
+        first_utc_time = datetime.datetime.utcfromtimestamp(first_second)
+        next_time = first_utc_time
 
         if not (pattern or count):
             count = 1
@@ -97,7 +111,7 @@ def create_cron_trigger(name, workflow_name, workflow_input,
         values = {
             'name': name,
             'pattern': pattern,
-            'first_execution_time': first_time,
+            'first_execution_time': first_utc_time,
             'next_execution_time': next_time,
             'remaining_executions': count,
             'workflow_name': wf_def.name,
@@ -110,5 +124,75 @@ def create_cron_trigger(name, workflow_name, workflow_input,
         security.add_trust_id(values)
 
         trig = db_api.create_cron_trigger(values)
+
+    return trig
+
+
+def create_event_trigger(name, exchange, topic, event, workflow_id,
+                         workflow_input=None, workflow_params=None):
+    with db_api.transaction():
+        wf_def = db_api.get_workflow_definition_by_id(workflow_id)
+
+        eng_utils.validate_input(
+            wf_def,
+            workflow_input or {},
+            parser.get_workflow_spec_by_definition_id(
+                wf_def.id,
+                wf_def.updated_at
+            )
+        )
+
+        values = {
+            'name': name,
+            'workflow_id': workflow_id,
+            'workflow_input': workflow_input or {},
+            'workflow_params': workflow_params or {},
+            'exchange': exchange,
+            'topic': topic,
+            'event': event,
+        }
+
+        security.add_trust_id(values)
+
+        trig = db_api.create_event_trigger(values)
+
+        trigs = db_api.get_event_triggers(insecure=True, exchange=exchange,
+                                          topic=topic)
+        events = [t.event for t in trigs]
+
+        # NOTE(kong): Send RPC message within the db transaction, rollback if
+        # any error occurs.
+        rpc.get_event_engine_client().create_event_trigger(
+            trig.to_dict(),
+            events
+        )
+
+    return trig
+
+
+def delete_event_trigger(event_trigger):
+    db_api.delete_event_trigger(event_trigger['id'])
+
+    trigs = db_api.get_event_triggers(
+        insecure=True,
+        exchange=event_trigger['exchange'],
+        topic=event_trigger['topic']
+    )
+    events = set([t.event for t in trigs])
+
+    # NOTE(kong): Send RPC message within the db transaction, rollback if
+    # any error occurs.
+    rpc.get_event_engine_client().delete_event_trigger(
+        event_trigger,
+        list(events)
+    )
+
+
+def update_event_trigger(id, values):
+    trig = db_api.update_event_trigger(id, values)
+
+    # NOTE(kong): Send RPC message within the db transaction, rollback if
+    # any error occurs.
+    rpc.get_event_engine_client().update_event_trigger(trig.to_dict())
 
     return trig

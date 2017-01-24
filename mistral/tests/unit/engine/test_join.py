@@ -27,8 +27,32 @@ cfg.CONF.set_default('auth_enable', False, group='pecan')
 
 
 class JoinEngineTest(base.EngineTestCase):
+    def test_full_join_simple(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          tasks:
+            join_task:
+              join: all
+
+            task1:
+              on-success: join_task
+
+            task2:
+              on-success: join_task
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
     def test_full_join_without_errors(self):
-        wf_full_join = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -59,17 +83,20 @@ class JoinEngineTest(base.EngineTestCase):
                 result3: <% task(task3).result %>
         """
 
-        wf_service.create_workflows(wf_full_join)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            self.assertDictEqual({'result': '1,2'}, wf_ex.output)
+
+            tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -79,10 +106,8 @@ class JoinEngineTest(base.EngineTestCase):
         self.assertEqual(states.SUCCESS, task2.state)
         self.assertEqual(states.SUCCESS, task3.state)
 
-        self.assertDictEqual({'result': '1,2'}, wf_ex.output)
-
     def test_full_join_with_errors(self):
-        wf_full_join_with_errors = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -111,17 +136,20 @@ class JoinEngineTest(base.EngineTestCase):
                 result3: <% task(task3).result %>
         """
 
-        wf_service.create_workflows(wf_full_join_with_errors)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            self.assertDictEqual({'result': '1-1'}, wf_ex.output)
+
+            tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -131,10 +159,8 @@ class JoinEngineTest(base.EngineTestCase):
         self.assertEqual(states.ERROR, task2.state)
         self.assertEqual(states.SUCCESS, task3.state)
 
-        self.assertDictEqual({'result': '1-1'}, wf_ex.output)
-
     def test_full_join_with_conditions(self):
-        wf_full_join_with_conditions = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -171,19 +197,23 @@ class JoinEngineTest(base.EngineTestCase):
                 result4: <% task(task4).result %>
         """
 
-        wf_service.create_workflows(wf_full_join_with_conditions)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self._await(
-            lambda:
-            len(db_api.get_workflow_execution(wf_ex.id).task_executions) == 4
-        )
+        def _num_of_tasks():
+            return len(
+                db_api.get_task_executions(workflow_execution_id=wf_ex.id)
+            )
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
-        tasks = wf_ex.task_executions
+        self._await(lambda: _num_of_tasks() == 4)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
         task2 = self._assert_single_item(tasks, name='task2')
@@ -191,16 +221,21 @@ class JoinEngineTest(base.EngineTestCase):
         task4 = self._assert_single_item(tasks, name='task4')
 
         # NOTE(xylan): We ensure task4 is successful here because of the
-        # uncertainty of its running parallelly with task3.
+        # uncertainty of its running in parallel with task3.
         self.await_task_success(task4.id)
 
         self.assertEqual(states.RUNNING, wf_ex.state)
         self.assertEqual(states.SUCCESS, task1.state)
         self.assertEqual(states.SUCCESS, task2.state)
-        self.assertEqual(states.WAITING, task3.state)
+
+        # NOTE(rakhmerov): Task 3 must fail because task2->task3 transition
+        # will never trigger due to its condition.
+        self.await_task_error(task3.id)
+
+        self.await_workflow_error(wf_ex.id)
 
     def test_partial_join(self):
-        wf_partial_join = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -243,17 +278,20 @@ class JoinEngineTest(base.EngineTestCase):
                 result4: <% task(task4).result %>
         """
 
-        wf_service.create_workflows(wf_partial_join)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            self.assertDictEqual({'result': '1,2'}, wf_ex.output)
+
+            tasks = wf_ex.task_executions
 
         self.assertEqual(4, len(tasks))
 
@@ -271,10 +309,9 @@ class JoinEngineTest(base.EngineTestCase):
         self.await_task_error(task3.id)
 
         self.assertDictEqual({'result4': '1,2'}, task4.published)
-        self.assertDictEqual({'result': '1,2'}, wf_ex.output)
 
     def test_partial_join_triggers_once(self):
-        wf_partial_join_triggers_once = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -323,17 +360,18 @@ class JoinEngineTest(base.EngineTestCase):
                 result5: <% task(task5).result %>
         """
 
-        wf_service.create_workflows(wf_partial_join_triggers_once)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            tasks = wf_ex.task_executions
 
         self.assertEqual(5, len(tasks))
 
@@ -344,15 +382,20 @@ class JoinEngineTest(base.EngineTestCase):
         success_count = sum([1 for t in tasks if t.state == states.SUCCESS])
 
         # At least task4 and two others must be successfully completed.
-        self.assertTrue(success_count >= 3)
+        self.assertGreaterEqual(success_count, 3)
 
         result5 = task5.published['result5']
 
         self.assertIsNotNone(result5)
-        self.assertEqual(2, result5.count('True'))
+
+        # Depending on how many inbound tasks completed before 'join'
+        # task5 started it can get different inbound context with.
+        # But at least two inbound results should be accessible at task5
+        # which logically corresponds to 'join' cardinality 2.
+        self.assertGreaterEqual(result5.count('True'), 2)
 
     def test_discriminator(self):
-        wf_discriminator = """---
+        wf_text = """---
         version: '2.0'
 
         wf:
@@ -394,17 +437,18 @@ class JoinEngineTest(base.EngineTestCase):
                 result4: <% task(task4).result %>
         """
 
-        wf_service.create_workflows(wf_discriminator)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            tasks = wf_ex.task_executions
 
         self.assertEqual(4, len(tasks))
 
@@ -415,12 +459,13 @@ class JoinEngineTest(base.EngineTestCase):
         success_count = sum([1 for t in tasks if t.state == states.SUCCESS])
 
         # At least task4 and one of others must be successfully completed.
-        self.assertTrue(success_count >= 2)
+        self.assertGreaterEqual(success_count, 2)
 
         result4 = task4.published['result4']
 
         self.assertIsNotNone(result4)
-        self.assertEqual(2, result4.count('False'))
+        self.assertLess(result4.count('False'), 3)
+        self.assertGreaterEqual(result4.count('True'), 1)
 
     def test_full_join_parallel_published_vars(self):
         wfs_tasks_join_complex = """---
@@ -479,23 +524,24 @@ class JoinEngineTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('main', {})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertDictEqual(
-            {
-                'var1': True,
-                'is_done': True,
-                'var2': True
-            },
-            wf_ex.output
-        )
+            self.assertDictEqual(
+                {
+                    'var1': True,
+                    'is_done': True,
+                    'var2': True
+                },
+                wf_ex.output
+            )
 
     @testtools.skip('https://bugs.launchpad.net/mistral/+bug/1424461')
     def test_full_join_parallel_published_vars_complex(self):
-        wfs_tasks_join_complex = """---
+        wf_text = """---
         version: "2.0"
 
         main:
@@ -538,28 +584,29 @@ class JoinEngineTest(base.EngineTestCase):
               publish:
                 var_d: 1
         """
-        wf_service.create_workflows(wfs_tasks_join_complex)
+        wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        exec_db = self.engine.start_workflow('main', {})
+        wf_ex = self.engine.start_workflow('main', {})
 
-        self.await_execution_success(exec_db.id)
+        self.await_workflow_success(wf_ex.id)
 
         # Note: We need to reread execution to access related tasks.
-        exec_db = db_api.get_execution(exec_db.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        self.assertDictEqual(
-            {
-                'var_a': 1,
-                'var_b': 1,
-                'var_c': 1,
-                'var_d': 1
-            },
-            exec_db.output
-        )
+            self.assertDictEqual(
+                {
+                    'var_a': 1,
+                    'var_b': 1,
+                    'var_c': 1,
+                    'var_d': 1
+                },
+                wf_ex.output
+            )
 
     def test_full_join_with_branch_errors(self):
-        wf_full_join_with_errors = """---
+        wf_text = """---
         version: '2.0'
 
         main:
@@ -576,6 +623,7 @@ class JoinEngineTest(base.EngineTestCase):
               action: std.noop
               on-success:
                 - task22
+
             task22:
               action: std.noop
               on-success:
@@ -585,6 +633,7 @@ class JoinEngineTest(base.EngineTestCase):
               action: std.fail
               on-success:
                 - task32
+
             task32:
               action: std.noop
               on-success:
@@ -595,13 +644,18 @@ class JoinEngineTest(base.EngineTestCase):
               action: std.noop
         """
 
-        wf_service.create_workflows(wf_full_join_with_errors)
+        wf_service.create_workflows(wf_text)
+
         wf_ex = self.engine.start_workflow('main', {})
 
-        self.await_execution_error(wf_ex.id)
+        self.await_workflow_error(wf_ex.id)
 
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
-        tasks = wf_ex.task_executions
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
+
+        self.assertIsNotNone(wf_ex.state_info)
 
         task10 = self._assert_single_item(tasks, name='task10')
         task21 = self._assert_single_item(tasks, name='task21')
@@ -614,4 +668,366 @@ class JoinEngineTest(base.EngineTestCase):
         self.assertEqual(states.SUCCESS, task22.state)
         self.assertEqual(states.ERROR, task31.state)
         self.assertNotIn('task32', [task.name for task in tasks])
-        self.assertEqual(states.WAITING, task40.state)
+        self.assertEqual(states.ERROR, task40.state)
+
+    def test_diamond_join_all(self):
+        wf_text = """---
+        version: '2.0'
+
+        test-join:
+          tasks:
+            a:
+              on-success:
+                - b
+                - c
+                - d
+
+            b:
+              on-success:
+                - e
+
+            c:
+              on-success:
+                - e
+
+            d:
+              on-success:
+                - e
+
+            e:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('test-join', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
+
+        self._assert_multiple_items(tasks, 5, state=states.SUCCESS)
+
+    def test_join_multiple_routes_with_one_source(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            a:
+              on-success:
+                - b
+                - c
+
+            b:
+              on-success:
+                - c
+
+            c:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            tasks = wf_ex.task_executions
+
+            self._assert_multiple_items(tasks, 3, state=states.SUCCESS)
+
+    def test_join_after_join(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            a:
+              on-success:
+                - c
+
+            b:
+              on-success:
+                - c
+
+            c:
+              join: all
+              on-success:
+                - f
+
+            d:
+              on-success:
+                - f
+
+            e:
+              on-success:
+                - f
+
+            f:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(6, len(task_execs))
+
+        self._assert_multiple_items(task_execs, 6, state=states.SUCCESS)
+
+    def test_join_route_delays(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            a:
+              wait-before: 4
+              on-success: b
+            b:
+              on-success: join
+
+            c:
+              on-success: join
+
+            join:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(4, len(task_execs))
+
+        self._assert_multiple_items(task_execs, 4, state=states.SUCCESS)
+
+    def test_delete_join_completion_check_on_stop(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            task1:
+              action: std.noop
+              on-success: join_task
+
+            task2:
+              description: Never ends
+              action: std.async_noop
+              on-success: join_task
+
+            join_task:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
+
+        self.assertTrue(len(tasks) >= 2)
+
+        task1 = self._assert_single_item(tasks, name='task1')
+
+        self.await_task_success(task1.id)
+
+        # Once task1 is finished we know that join_task must be created.
+
+        tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
+
+        self._assert_single_item(
+            tasks,
+            name='join_task',
+            state=states.WAITING
+        )
+
+        calls = db_api.get_delayed_calls()
+
+        mtd_name = 'mistral.engine.task_handler._refresh_task_state'
+
+        cnt = sum([1 for c in calls if c.target_method_name == mtd_name])
+
+        # There can be 2 calls with different value of 'processing' flag.
+        self.assertTrue(cnt == 1 or cnt == 2)
+
+        # Stop the workflow.
+        self.engine.stop_workflow(wf_ex.id, state=states.CANCELLED)
+
+        self._await(
+            lambda:
+            len(db_api.get_delayed_calls(target_method_name=mtd_name)) == 0
+        )
+
+    def test_delete_join_completion_check_on_execution_delete(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            task1:
+              action: std.noop
+              on-success: join_task
+
+            task2:
+              description: Never ends
+              action: std.async_noop
+              on-success: join_task
+
+            join_task:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
+
+        self.assertTrue(len(tasks) >= 2)
+
+        task1 = self._assert_single_item(tasks, name='task1')
+
+        self.await_task_success(task1.id)
+
+        # Once task1 is finished we know that join_task must be created.
+
+        tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
+
+        self._assert_single_item(
+            tasks,
+            name='join_task',
+            state=states.WAITING
+        )
+
+        calls = db_api.get_delayed_calls()
+
+        mtd_name = 'mistral.engine.task_handler._refresh_task_state'
+
+        cnt = sum([1 for c in calls if c.target_method_name == mtd_name])
+
+        # There can be 2 calls with different value of 'processing' flag.
+        self.assertTrue(cnt == 1 or cnt == 2)
+
+        # Stop the workflow.
+        db_api.delete_workflow_execution(wf_ex.id)
+
+        self._await(
+            lambda:
+            len(db_api.get_delayed_calls(target_method_name=mtd_name)) == 0
+        )
+
+    def test_join_with_deep_dependencies_tree(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          tasks:
+            task_a_1:
+              on-success:
+                - task_with_join
+
+            task_b_1:
+              action: std.fail
+              on-success:
+                - task_b_2
+
+            task_b_2:
+              on-success:
+                - task_b_3
+
+            task_b_3:
+              on-success:
+                - task_with_join
+
+            task_with_join:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(3, len(task_execs))
+        self._assert_single_item(
+            task_execs,
+            name='task_a_1',
+            state=states.SUCCESS
+        )
+        self._assert_single_item(
+            task_execs,
+            name='task_b_1',
+            state=states.ERROR
+        )
+        self._assert_single_item(
+            task_execs,
+            name='task_with_join',
+            state=states.ERROR
+        )
+
+    def test_no_workflow_error_after_inbound_error(self):
+        wf_text = """---
+        version: "2.0"
+
+        wf:
+          output:
+            continue_flag: <% $.get(continue_flag) %>
+
+          task-defaults:
+            on-error:
+              - change_continue_flag
+
+          tasks:
+            task_a:
+              action: std.fail
+              on-success:
+                - task_c: <% $.get(continue_flag) = null %>
+                - task_a_process
+
+            task_a_process:
+              action: std.noop
+
+            task_b:
+              on-success:
+                - task_c: <% $.get(continue_flag) = null %>
+
+            task_c:
+              join: all
+
+            change_continue_flag:
+              publish:
+                continue_flag: false
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', {})
+
+        self.await_workflow_success(wf_ex.id)

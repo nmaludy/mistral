@@ -30,8 +30,8 @@ will be described in details below:
 Prerequisites
 -------------
 
-Mistral DSL takes advantage of
-`YAQL <https://pypi.python.org/pypi/yaql/1.0.0>`__ expression language to
+Mistral DSL supports `YAQL <https://pypi.python.org/pypi/yaql/1.0.0>`__ and
+`Jinja2 <http://jinja.pocoo.org/docs/dev/>`__ expression languages to
 reference workflow context variables and thereby implements passing data
 between workflow tasks. It's also referred to as Data Flow mechanism.
 YAQL is a simple but powerful query language that allows to extract
@@ -51,11 +51,12 @@ in the following sections of DSL:
 
 Mistral DSL is fully based on YAML and knowledge of YAML is a plus for
 better understanding of the material in this specification. It also
-takes advantage of YAQL query language to define expressions in workflow
+takes advantage of supported query languages to define expressions in workflow
 and action definitions.
 
 -  Yet Another Markup Language (YAML): http://yaml.org
 -  Yet Another Query Language (YAQL): https://pypi.python.org/pypi/yaql/1.0.0
+-  Jinja 2: http://jinja.pocoo.org/docs/dev/
 
 Workflows
 ---------
@@ -77,14 +78,14 @@ YAML example
     create_vm:
       description: Simple workflow example
       type: direct
-     
+
       input:
         - vm_name
         - image_ref
         - flavor_ref
       output:
         vm_id: <% $.vm_id %>
-     
+
       tasks:
         create_server:
           action: nova.servers_create name=<% $.vm_name %> image=<% $.image_ref %> flavor=<% $.flavor_ref %>
@@ -103,7 +104,7 @@ This example workflow simply sends a command to OpenStack Compute
 service Nova to start creating a virtual machine and wait till it's
 created using special "retry" policy.
 
-Workflow Types
+Workflow types
 ^^^^^^^^^^^^^^
 
 Mistral DSL v2 introduces different workflow types and the structure of
@@ -117,15 +118,19 @@ Mistral provides two workflow types:
 
 See corresponding sections for details.
 
-Common Workflow Attributes
+Common workflow attributes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--  **type** - Workflow type. Either 'direct' or 'reverse'. *Optional*. 'direct' by default.
+-  **type** - Workflow type. Either 'direct' or 'reverse'. *Optional*. 'direct'
+   by default.
 -  **description** - Arbitrary text containing workflow description. *Optional*.
 -  **input** - List defining required input parameter names and
    optionally their default values in a form "my_param: 123". *Optional*.
--  **output** - Any data structure arbitrarily containing YAQL
+-  **output** - Any data structure arbitrarily containing
    expressions that defines workflow output. May be nested. *Optional*.
+-  **output-on-error** - Any data structure arbitrarily containing YAQL
+   expressions that defines output of a workflow to be returned if it goes into
+   error state. May be nested. *Optional*.
 -  **task-defaults** - Default settings for some of task attributes
    defined at workflow level. *Optional*. Corresponding attribute
    defined for a specific task always takes precedence. Specific task
@@ -175,7 +180,7 @@ ahead it's worth saying that Mistral provides a lot of actions out of
 the box (including actions for most of the core OpenStack services) and
 it's also easy to plug new actions into Mistral.
 
-Common Task Attributes
+Common task attributes
 ''''''''''''''''''''''
 
 All Mistral tasks regardless of workflow type have the following common
@@ -183,21 +188,24 @@ attributes:
 
 -  **description** - Arbitrary text containing task description.
    *Optional*.
--  **action** - Name of the action associated with the task. *Required
-   but mutually exclusive with* **workflow**.
+-  **action** - Name of the action associated with the task.
+   *Mutually exclusive with* **workflow**. If neither action nor workflow are
+   provided then the action 'std.noop' will be used.
 -  **workflow** - Name of the workflow associated with the task.
-   *Required but mutually exclusive with* **action**.
+   *Mutually exclusive with* **action**.
 -  **input** - Actual input parameter values of the task. *Optional*.
    Value of each parameter is a JSON-compliant type such as number,
-   string etc, dictionary or list. It can also be a YAQL expression to
+   string etc, dictionary or list. It can also be an expression to
    retrieve value from task context or any of the mentioned types
-   containing inline YAQL expressions (for example, string "<%
+   containing inline expressions (for example, string "<%
    $.movie_name %> is a cool movie!")
 -  **publish** - Dictionary of variables to publish to the workflow
    context. Any JSON-compatible data structure optionally containing
-   YAQL expression to select precisely what needs to be published.
+   expression to select precisely what needs to be published.
    Published variables will be accessible for downstream tasks via using
-   YAQL expressions. *Optional*.
+   expressions. *Optional*.
+-  **publish-on-error** - Same as **publish** but evaluated in case of
+    task execution failures. *Optional*
 -  **with-items** - If configured, it allows to run action or workflow
    associated with a task multiple times on a provided list of items.
    See `Processing collections using
@@ -214,6 +222,9 @@ attributes:
 -  **timeout** - Configures timeout policy. *Optional*.
 -  **retry** - Configures retry policy. *Optional*.
 -  **concurrency** - Configures concurrency policy. *Optional*.
+-  **safe-rerun** - Boolean value allowing to rerun task if executor dies
+   during action execution. If set to 'true' task may be run twice.
+   *Optional*. By default set to 'false'.
 
 Policies
 ''''''''
@@ -264,8 +275,8 @@ automatically by engine if hasn't completed.
 
 **concurrency**
 
-Defines a max number of actions running simultaneously in a task. *Applicable* only for tasks that
-have *with-items*.
+Defines a max number of actions running simultaneously in a task. *Applicable*
+only for tasks that have *with-items*.
 
 
 **retry**
@@ -276,12 +287,13 @@ Defines a pattern how task should be repeated in case of an error.
    repeated.
 -  **delay** - Defines a delay in seconds between subsequent task
    iterations.
--  **break-on** - Defines a YAQL expression that will break iteration
+-  **break-on** - Defines an expression that will break iteration
    loop if it evaluates to 'true'. If it fires then the task is
    considered error.
--  **continue-on** - Defines a YAQL expression that will continue iteration
+-  **continue-on** - Defines an expression that will continue iteration
    loop if it evaluates to 'true'. If it fires then the task is
-   considered successful. If it evaluates to 'false' then policy will break the iteration.
+   considered successful. If it evaluates to 'false' then policy will break the
+   iteration.
 
 Retry policy can also be configured on a single line as:
 
@@ -291,9 +303,9 @@ Retry policy can also be configured on a single line as:
       action: my_action
       retry: count=10 delay=5 break-on=<% $.foo = 'bar' %>
 
-All parameter values for any policy can be defined as YAQL expressions.
+All parameter values for any policy can be defined as expressions.
 
-Simplified Input Syntax
+Simplified input syntax
 '''''''''''''''''''''''
 
 When describing a workflow task it's possible to specify its input
@@ -306,7 +318,7 @@ Full syntax:
     my_task:
       action: std.http
       input:
-         url: http://mywebsite.org
+        url: http://mywebsite.org
         method: GET
 
 Simplified syntax:
@@ -341,7 +353,7 @@ keyword *input*. In this case all the parameters will be effectively
 merged. If the same parameter is specified in both ways then the one
 under *input* keyword takes precedence.
 
-Direct Workflow
+Direct workflow
 ^^^^^^^^^^^^^^^
 
 Direct workflow consists of tasks combined in a graph where every next
@@ -391,7 +403,7 @@ YAML example
         send_success_email:
           action: send_email to_addrs=['admin@mysite.org'] body='Vm is successfully created and its id <% $.vm_id %>'
 
-Direct Workflow Task Attributes
+Direct workflow task attributes
 '''''''''''''''''''''''''''''''
 
 -  **on-success** - List of tasks which will run after the task has
@@ -405,7 +417,7 @@ Transitions with YAQL expressions
 '''''''''''''''''''''''''''''''''
 
 Task transitions can be determined by success/error/completeness of the
-previous tasks and also by additional YAQL guard expressions that can
+previous tasks and also by additional guard expressions that can
 access any data produced by upstream tasks. So in the example above task
 'create_vm' could also have a YAQL expression on transition to task
 'send_success_email' as follows:
@@ -418,8 +430,8 @@ access any data produced by upstream tasks. So in the example above task
        - send_success_email: <% $.vm_id != null %>
 
 And this would tell Mistral to run 'send_success_email' task only if
-'vm_id' variable published by task 'create_vm' is not empty. YAQL
-expressions can also be applied to 'on-error' and 'on-complete'.
+'vm_id' variable published by task 'create_vm' is not empty.
+Expressions can also be applied to 'on-error' and 'on-complete'.
 
 Fork
 ''''
@@ -473,7 +485,7 @@ run only if all upstream tasks (ones that lead to this task) are
 completed and corresponding conditions have triggered. Task A is
 considered an upstream task of Task B if Task A has Task B mentioned in
 any of its "on-success", "on-error" and "on-complete" clauses regardless
-of YAQL guard expressions.
+of guard expressions.
 
 Partial Join (join: 2)
 
@@ -513,7 +525,7 @@ In this case instead of 1 it is possible to specify special
 string value "one" which is introduced for symmetry with "all". However,
 it's up to the user whether to use "1" or "one".
 
-Reverse Workflow
+Reverse workflow
 ^^^^^^^^^^^^^^^^
 
 In reverse workflow all relationships in workflow task graph are
@@ -569,13 +581,13 @@ YAML example
           action: send_email to='admin@mysite.org' body='Vm is created and id <% $.vm_id %> and ip address <% $.vm_ip %>'
           requires: [create_vm, associate_ip]
 
-Reverse Workflow Task Attributes
+Reverse workflow task attributes
 ''''''''''''''''''''''''''''''''
 
 -  **requires** - List of tasks which should be executed before this
    task. *Optional*.
 
-Processing Collections
+Processing collections
 ^^^^^^^^^^^^^^^^^^^^^^
 
 YAML example
@@ -587,7 +599,7 @@ YAML example
     version: '2.0'
 
     create_vms:
-      description: Creating multiple virtual servers using "with-items". 
+      description: Creating multiple virtual servers using "with-items".
 
       input:
         - vm_names
@@ -655,13 +667,27 @@ similar to a regular function in general purpose programming language
 like Python. It has a name and parameters. Mistral distinguishes 'system
 actions' and 'Ad-hoc actions'.
 
-System Actions
+System actions
 ^^^^^^^^^^^^^^
 
 System actions are provided by Mistral out of the box and can be used by
 anyone. It is also possible to add system actions for specific Mistral
 installation via a special plugin mechanism. Currently, built-in system
 actions are:
+
+std.fail
+''''''''
+
+Fail the current workflow. This action can be used to manually set the workflow
+state to error.
+
+Example:
+
+.. code-block:: yaml
+
+    manual_fail:
+      action: std.fail
+
 
 std.http
 ''''''''
@@ -726,8 +752,8 @@ std.email
 Sends an email message via SMTP protocol.
 
 -  **to_addrs** - Comma separated list of recipients. *Required*.
--  **subject** - Subject of the message. *Required*.
--  **body** - Text containing message body. *Required*.
+-  **subject** - Subject of the message. *Optional*.
+-  **body** - Text containing message body. *Optional*.
 -  **from_addr** - Sender email address. *Required*.
 -  **smtp_server** - SMTP server host name. *Required*.
 -  **smtp_password** - SMTP server password. *Required*.
@@ -746,7 +772,7 @@ Example:
             -- Thanks, Mistral Team.
           from_addr: mistral@openstack.org
           smtp_server: smtp.google.com
-          smtp_password: SECRET 
+          smtp_password: SECRET
 
 The syntax of 'std.emal' action is pretty verbose. However, it can be
 significantly simplified using Ad-hoc actions. More about them
@@ -763,11 +789,11 @@ Input parameters:
    executed. *Required*.
 -  **host** - Host name that the command needs to be executed on.
    *Required*.
--  **username** - User name to authenticate on the host.
--  **password** - User password to to authenticate on the host. *Optional.*
+-  **username** - User name to authenticate on the host. *Required*. 
+-  **password** - User password to to authenticate on the host. *Optional*.
 -  **private_key_filename** - Private key file name which will be used for authentication on remote host.
 All private keys should be on executor host in **<home-user-directory>/.ssh/**.
-**<home-user-directory>** should refer to user directory under which service is running. *Optional.*
+**<home-user-directory>** should refer to user directory under which service is running. *Optional*.
 
 **NOTE**: Authentication using key pairs is supported, key should be
 on Mistral Executor server machine.
@@ -799,20 +825,20 @@ its wrapper - PyV8. For installing it, do the next steps:
 
 1. Install required libraries - boost, g++, libtool, autoconf, subversion, libv8-legacy-dev: On Ubuntu::
 
-    sudo apt-get install libboost-all-dev g++ libtool autoconf libv8-legacy-dev subversion make
+    $ sudo apt-get install libboost-all-dev g++ libtool autoconf libv8-legacy-dev subversion make
 
 2. Checkout last version of PyV8::
 
-    svn checkout http://pyv8.googlecode.com/svn/trunk/ pyv8
-    cd pyv8
+    $ svn checkout http://pyv8.googlecode.com/svn/trunk/ pyv8
+    $ cd pyv8
 
 3. Build PyV8 - it will checkout last V8 trunk, build it, and then build PyV8::
 
-    sudo python setup.py build
+    $ sudo python setup.py build
 
 4. Install PyV8::
 
-    sudo python setup.py install
+    $ sudo python setup.py install
 
 Example:
 
@@ -830,7 +856,7 @@ Example:
         - radix: 16
 
       output:
-        uuid: <% task(generate_uuid_task).result %>
+        uuid: <% $.generated_uuid %>
 
       tasks:
         generate_uuid_task:
@@ -843,7 +869,7 @@ Example:
                       return v.toString($.radix);
               });
           publish:
-            generated_uuid: <% $.generate_uuid_task %>
+            generated_uuid: <% task(generate_uuid_task).result %>
 
 Another example for getting the current date and time:
 
@@ -851,7 +877,7 @@ Another example for getting the current date and time:
 
       ---
       version: '2.0'
-      
+
       get_date_workflow:
         description: Get the current date
 
@@ -859,7 +885,7 @@ Another example for getting the current date and time:
 
         output:
           current_date: <% $.current_date %>
-      
+
         tasks:
           get_date_task:
             action: std.javascript
@@ -871,7 +897,7 @@ Another example for getting the current date and time:
             publish:
               current_date: <% task(get_date_task).result %>
 
-Ad-hoc Actions
+Ad-hoc actions
 ^^^^^^^^^^^^^^
 
 Ad-hoc action is a special type of action that can be created by user.
@@ -929,14 +955,14 @@ Attributes
    used only for documenting purposes. Mistral now does not enforce
    actual input parameters to exactly correspond to this list. Based
    parameters will be calculated based on provided actual parameters
-   with using YAQL expressions so what's used in expressions implicitly
+   with using expressions so what's used in expressions implicitly
    define real input parameters. Dictionary of actual input parameters
-   is referenced in YAQL as '$.'. Redundant parameters will be simply
-   ignored.
+   (expression context) is referenced as '$.' in YAQL and as '_.' in Jinja.
+   Redundant parameters will be simply ignored.
 -  **output** - Any data structure defining how to calculate output of
    this action based on output of base action. It can optionally have
-   YAQL expressions to access properties of base action output
-   referenced in YAQL as '$.'.
+   expressions to access properties of base action output through expression
+   context.
 
 Workbooks
 ---------
@@ -1026,10 +1052,10 @@ Attributes
 -  **actions** - Dictionary containing ad-hoc action definitions.
    *Optional*.
 
-Predefined Values/Functions in execution data context
+Predefined values/Functions in execution data context
 -----------------------------------------------------
 
-Using YAQL it is possible to use some predefined values in Mistral DSL.
+Using expressions it is possible to use some predefined values in Mistral DSL.
 
 -  **OpenStack context**
 -  **Task result**
@@ -1046,8 +1072,10 @@ OpenStack context is available by **$.openstack**. It contains
 Task result
 ^^^^^^^^^^^
 
-Task result is available by **task(<task_name>).result**. It contains task result and directly depends on action output
-structure. Note that the *task(<task_name>)* function itself returns more than only task result. It returns the following fields of task executions:
+Task result is available by **task(<task_name>).result**. It contains task result
+and directly depends on action output structure. Note that the *task(<task_name>)*
+function itself returns more than only task result. It returns the following
+fields of task executions:
 
 * **id** - task execution UUID.
 * **name** - task execution name.

@@ -17,7 +17,7 @@ import eventlet
 import mock
 from oslo_config import cfg
 
-from mistral.engine import rpc
+from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
 from mistral.services import periodic
 from mistral.services import security
@@ -145,7 +145,7 @@ class TriggerServiceV2Test(base.DbTestCase):
         # But creation with the same count and first time
         # simultaneously leads to error.
         self.assertRaises(
-            exc.DBDuplicateEntryException,
+            exc.DBDuplicateEntryError,
             t_s.create_cron_trigger,
             'trigger-%s' % utils.generate_unicode_uuid(),
             self.wf.name,
@@ -329,3 +329,9 @@ class TriggerServiceV2Test(base.DbTestCase):
         eventlet.sleep(1)
 
         return trigger_count == start_wf_mock.call_count
+
+    def test_get_next_execution_time(self):
+        pattern = '*/20 * * * *'
+        start_time = datetime.datetime(2016, 3, 22, 23, 40)
+        result = t_s.get_next_execution_time(pattern, start_time)
+        self.assertEqual(result, datetime.datetime(2016, 3, 23, 0, 0))

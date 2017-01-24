@@ -53,29 +53,23 @@ class WorkflowVariablesTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow('wf', {'param2': 'Renat'})
 
-        self.await_execution_success(wf_ex.id)
+        self.await_workflow_success(wf_ex.id)
 
-        # Note: We need to reread execution to access related tasks.
-        wf_ex = db_api.get_workflow_execution(wf_ex.id)
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
 
-        tasks = wf_ex.task_executions
+            wf_output = wf_ex.output
+            tasks = wf_ex.task_executions
 
         task1 = self._assert_single_item(tasks, name='task1')
 
         self.assertEqual(states.SUCCESS, task1.state)
-
-        self._assert_dict_contains_subset(
-            {
-                'literal_var': 'Literal value',
-                'yaql_var': 'Hello Renat'
-            },
-            task1.in_context
-        )
 
         self.assertDictEqual(
             {
                 'literal_var': 'Literal value',
                 'yaql_var': 'Hello Renat'
             },
-            wf_ex.output
+            wf_output
         )

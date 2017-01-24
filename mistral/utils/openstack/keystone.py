@@ -13,20 +13,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import keystoneauth1.identity.generic as auth_plugins
+from keystoneauth1 import session as ks_session
+from keystoneclient import service_catalog as ks_service_catalog
 from keystoneclient.v3 import client as ks_client
+from keystoneclient.v3 import endpoints as ks_endpoints
 from oslo_config import cfg
+from oslo_utils import timeutils
+import six
 
 from mistral import context
+from mistral import exceptions
 
 CONF = cfg.CONF
 
 
 def client():
     ctx = context.ctx()
-    auth_url = CONF.keystone_authtoken.auth_uri
+    auth_url = ctx.auth_uri
 
     cl = ks_client.Client(
-        username=ctx.user_name,
+        user_id=ctx.user_id,
         token=ctx.auth_token,
         tenant_id=ctx.project_id,
         auth_url=auth_url
@@ -62,45 +69,95 @@ def client_for_trusts(trust_id):
 
 
 def get_endpoint_for_project(service_name=None, service_type=None):
-    admin_project_name = CONF.keystone_authtoken.admin_tenant_name
-    keystone_client = _admin_client(project_name=admin_project_name)
-    service_list = keystone_client.services.list()
-
-    if service_name:
-        service_ids = [s.id for s in service_list if s.name == service_name]
-    elif service_type:
-        service_ids = [s.id for s in service_list if s.type == service_type]
-    else:
-        raise Exception(
+    if service_name is None and service_type is None:
+        raise exceptions.MistralException(
             "Either 'service_name' or 'service_type' must be provided."
         )
 
-    if not service_ids:
-        raise Exception("Either service '%s' or service type "
-                        "'%s' doesn't exist!" % (service_name, service_type))
+    ctx = context.ctx()
 
-    endpoints = keystone_client.endpoints.list(
-        service=service_ids[0],
-        interface='public'
+    service_catalog = obtain_service_catalog(ctx)
+
+    service_endpoints = service_catalog.get_endpoints(
+        service_name=service_name,
+        service_type=service_type,
+        region_name=ctx.region_name
     )
 
-    if not endpoints:
-        raise Exception(
-            "No endpoints found [service_name=%s, service_type=%s]"
-            % (service_name, service_type)
-        )
+    endpoint = None
+    for endpoints in six.itervalues(service_endpoints):
+        for ep in endpoints:
+            # is V3 interface?
+            if 'interface' in ep:
+                interface_type = ep['interface']
+                if CONF.os_actions_endpoint_type in interface_type:
+                    endpoint = ks_endpoints.Endpoint(
+                        None,
+                        ep,
+                        loaded=True
+                    )
+                    break
+            # is V2 interface?
+            if 'publicURL' in ep:
+                endpoint_data = {
+                    'url': ep['publicURL'],
+                    'region': ep['region']
+                }
+                endpoint = ks_endpoints.Endpoint(
+                    None,
+                    endpoint_data,
+                    loaded=True
+                )
+                break
 
-    # TODO(rakhmerov): We may have more than one endpoint because of regions
-    # TODO(rakhmerov): and ideally we need a config option for region
-    return endpoints[0]
+    if not endpoint:
+        raise exceptions.MistralException(
+            "No endpoints found [service_name=%s, service_type=%s,"
+            " region_name=%s]"
+            % (service_name, service_type, ctx.region_name)
+        )
+    else:
+        return endpoint
+
+
+def obtain_service_catalog(ctx):
+    token = ctx.auth_token
+
+    if ctx.is_trust_scoped and is_token_trust_scoped(token):
+        if ctx.trust_id is None:
+            raise Exception(
+                "'trust_id' must be provided in the admin context."
+            )
+
+        trust_client = client_for_trusts(ctx.trust_id)
+        response = trust_client.tokens.get_token_data(
+            token,
+            include_catalog=True
+        )['token']
+    else:
+        response = ctx.service_catalog
+
+        # Target service catalog may not be passed via API.
+        if not response and ctx.is_target:
+            response = client().tokens.get_token_data(
+                token,
+                include_catalog=True
+            )['token']
+
+    if not response:
+        raise exceptions.UnauthorizedException()
+
+    service_catalog = ks_service_catalog.ServiceCatalog.factory(response)
+
+    return service_catalog
 
 
 def get_keystone_endpoint_v2():
-    return get_endpoint_for_project('keystone')
+    return get_endpoint_for_project('keystone', service_type='identity')
 
 
 def get_keystone_url_v2():
-    return get_endpoint_for_project('keystone').url
+    return get_endpoint_for_project('keystone', service_type='identity').url
 
 
 def format_url(url_template, values):
@@ -117,3 +174,28 @@ def is_token_trust_scoped(auth_token):
     token_info = keystone_client.tokens.validate(auth_token)
 
     return 'OS-TRUST:trust' in token_info
+
+
+def get_admin_session():
+    """Returns a keystone session from Mistral's service credentials."""
+
+    auth = auth_plugins.Password(
+        CONF.keystone_authtoken.auth_uri,
+        username=CONF.keystone_authtoken.admin_user,
+        password=CONF.keystone_authtoken.admin_password,
+        project_name=CONF.keystone_authtoken.admin_tenant_name,
+        # NOTE(jaosorior): Once mistral supports keystone v3 properly, we can
+        # fetch the following values from the configuration.
+        user_domain_name='Default',
+        project_domain_name='Default')
+
+    return ks_session.Session(auth=auth)
+
+
+def will_expire_soon(expires_at):
+    if not expires_at:
+        return False
+    stale_duration = CONF.expiration_token_duration
+    assert stale_duration, "expiration_token_duration must be specified"
+    expires = timeutils.parse_isotime(expires_at)
+    return timeutils.is_soon(expires, stale_duration)

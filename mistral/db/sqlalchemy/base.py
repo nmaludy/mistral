@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -14,11 +13,11 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import six
 
 from oslo_config import cfg
 from oslo_db import options
-from oslo_db.sqlalchemy import session as db_session
+from oslo_db.sqlalchemy import enginefacade
+import osprofiler.sqlalchemy
 import sqlalchemy as sa
 
 from mistral.db.sqlalchemy import sqlite_lock
@@ -39,12 +38,20 @@ def _get_facade():
     global _facade
 
     if not _facade:
-        _facade = db_session.EngineFacade(
+        _facade = enginefacade.LegacyEngineFacade(
             cfg.CONF.database.connection,
             sqlite_fk=True,
             autocommit=False,
-            **dict(six.iteritems(cfg.CONF.database))
+            **dict(cfg.CONF.database.items())
         )
+
+        if cfg.CONF.profiler.enabled:
+            if cfg.CONF.profiler.trace_sqlalchemy:
+                osprofiler.sqlalchemy.add_tracing(
+                    sa,
+                    _facade.get_engine(),
+                    'db'
+                )
 
     return _facade
 
@@ -201,6 +208,11 @@ def end_tx():
 @session_aware()
 def get_driver_name(session=None):
     return session.bind.url.drivername
+
+
+@session_aware()
+def get_dialect_name(session=None):
+    return session.bind.url.get_dialect().name
 
 
 @session_aware()

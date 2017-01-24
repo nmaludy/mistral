@@ -12,6 +12,8 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+from mistral import context as auth_context
+from mistral import exceptions
 from mistral.tests.unit import base
 from mistral.utils.openstack import keystone
 
@@ -40,4 +42,15 @@ class KeystoneUtilsTest(base.BaseTest):
         self.assertEqual(
             expected,
             keystone.format_url(url_template, self.values)
+        )
+
+    def test_get_endpoint_for_project_noauth(self):
+        # service_catalog is not set by default.
+        auth_context.set_ctx(base.get_context())
+        self.addCleanup(auth_context.set_ctx, None)
+
+        self.assertRaises(
+            exceptions.UnauthorizedException,
+            keystone.get_endpoint_for_project,
+            'keystone'
         )

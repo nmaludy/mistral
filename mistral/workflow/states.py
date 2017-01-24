@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright 2013 - Mirantis, Inc.
+# Copyright 2016 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -22,17 +21,28 @@ RUNNING = 'RUNNING'
 RUNNING_DELAYED = 'DELAYED'
 PAUSED = 'PAUSED'
 SUCCESS = 'SUCCESS'
+CANCELLED = 'CANCELLED'
 ERROR = 'ERROR'
 
-_ALL = [IDLE, WAITING, RUNNING, SUCCESS, ERROR, PAUSED, RUNNING_DELAYED]
+_ALL = [
+    IDLE,
+    WAITING,
+    RUNNING,
+    RUNNING_DELAYED,
+    PAUSED,
+    SUCCESS,
+    CANCELLED,
+    ERROR
+]
 
 _VALID_TRANSITIONS = {
-    IDLE: [RUNNING, ERROR],
+    IDLE: [RUNNING, ERROR, CANCELLED],
     WAITING: [RUNNING],
-    RUNNING: [PAUSED, RUNNING_DELAYED, SUCCESS, ERROR],
-    RUNNING_DELAYED: [RUNNING, ERROR],
-    PAUSED: [RUNNING, ERROR],
+    RUNNING: [PAUSED, RUNNING_DELAYED, SUCCESS, ERROR, CANCELLED],
+    RUNNING_DELAYED: [RUNNING, ERROR, CANCELLED],
+    PAUSED: [RUNNING, ERROR, CANCELLED],
     SUCCESS: [],
+    CANCELLED: [RUNNING],
     ERROR: [RUNNING]
 }
 
@@ -46,7 +56,11 @@ def is_invalid(state):
 
 
 def is_completed(state):
-    return state in [SUCCESS, ERROR]
+    return state in [SUCCESS, ERROR, CANCELLED]
+
+
+def is_cancelled(state):
+    return state == CANCELLED
 
 
 def is_running(state):
@@ -67,6 +81,10 @@ def is_paused(state):
 
 def is_paused_or_completed(state):
     return is_paused(state) or is_completed(state)
+
+
+def is_paused_or_idle(state):
+    return is_paused(state) or is_idle(state)
 
 
 def is_valid_transition(from_state, to_state):

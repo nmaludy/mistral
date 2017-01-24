@@ -16,10 +16,16 @@ import abc
 import inspect
 import traceback
 
+from cachetools import LRUCache
+
 from oslo_log import log
 
 from mistral.actions import base
+from mistral import context
 from mistral import exceptions as exc
+from mistral.utils.openstack import keystone as keystone_utils
+
+from threading import Lock
 
 LOG = log.getLogger(__name__)
 
@@ -31,21 +37,21 @@ class OpenStackAction(base.Action):
     which are constructed via OpenStack Action generators.
     """
     _kwargs_for_run = {}
-    _client_class = None
     client_method_name = None
+    _clients = LRUCache(100)
+    _lock = Lock()
 
     def __init__(self, **kwargs):
         self._kwargs_for_run = kwargs
 
     @abc.abstractmethod
-    def _get_client(self):
-        """Returns python-client instance
-
-        Gets client instance according to specific OpenStack Service
-        (e.g. Nova, Glance, Heat, Keystone etc)
-
-        """
+    def _create_client(self):
+        """Creates client required for action operation"""
         pass
+
+    @classmethod
+    def _get_client_class(cls):
+        return None
 
     @classmethod
     def _get_client_method(cls, client):
@@ -64,12 +70,55 @@ class OpenStackAction(base.Action):
         It is needed for getting client-method args and description for
         saving into DB.
         """
-        # Default is simple _client_class instance
-        return cls._client_class()
+        # Default is simple _get_client_class instance
+        return cls._get_client_class()()
 
     @classmethod
     def get_fake_client_method(cls):
         return cls._get_client_method(cls._get_fake_client())
+
+    def _get_client(self):
+        """Returns python-client instance via cache or creation
+
+        Gets client instance according to specific OpenStack Service
+        (e.g. Nova, Glance, Heat, Keystone etc)
+
+        """
+
+        # TODO(d0ugal): Caching has caused some security problems and
+        #               regressions in Mistral. It is disabled for now and
+        #               will be revisited in Ocata. See:
+        #               https://bugs.launchpad.net/mistral/+bug/1627689
+        return self._create_client()
+
+        ctx = context.ctx()
+        client_class = self.__class__.__name__
+        # Colon character is reserved (rfc3986) which avoids key collisions.
+        key = client_class + ':' + ctx.project_id
+
+        def create_cached_client():
+            new_client = self._create_client()
+            new_client._mistral_ctx_expires_at = ctx.expires_at
+
+            with self._lock:
+                self._clients[key] = new_client
+
+            return new_client
+
+        with self._lock:
+            client = self._clients.get(key)
+
+        if client is None:
+            return create_cached_client()
+
+        if keystone_utils.will_expire_soon(client._mistral_ctx_expires_at):
+            LOG.debug("cache expiring soon, will refresh client")
+
+            return create_cached_client()
+
+        LOG.debug("cache not expiring soon, will return cached client")
+
+        return client
 
     def run(self):
         try:

@@ -81,9 +81,9 @@ class SchedulerServiceTest(base.DbTestCase):
     def setUp(self):
         super(SchedulerServiceTest, self).setUp()
 
-        self.thread_group = scheduler.setup()
+        sched = scheduler.start()
 
-        self.addCleanup(self.thread_group.stop)
+        self.addCleanup(scheduler.stop_scheduler, sched, True)
 
     @mock.patch(FACTORY_METHOD_PATH)
     def test_scheduler_with_factory(self, factory):
@@ -242,11 +242,12 @@ class SchedulerServiceTest(base.DbTestCase):
 
     @mock.patch(TARGET_METHOD_PATH)
     def test_scheduler_multi_instance(self, method):
-        def stop_thread_groups():
-            [tg.stop() for tg in self.tgs]
+        scheds = [scheduler.start(), scheduler.start()]
 
-        self.tgs = [scheduler.setup(), scheduler.setup()]
-        self.addCleanup(stop_thread_groups)
+        def stop_schedulers():
+            [scheduler.stop_scheduler(s, True) for s in scheds]
+
+        self.addCleanup(stop_schedulers)
 
         method_args = {'name': 'task', 'id': '321'}
 
@@ -289,10 +290,11 @@ class SchedulerServiceTest(base.DbTestCase):
 
         eventlet.sleep(WAIT)
 
-        self.assertRaises(exc.DBEntityNotFoundException,
-                          db_api.get_delayed_call,
-                          calls[0].id
-                          )
+        self.assertRaises(
+            exc.DBEntityNotFoundError,
+            db_api.get_delayed_call,
+            calls[0].id
+        )
 
     @mock.patch(FACTORY_METHOD_PATH)
     def test_processing_true_does_not_return_in_get_delayed_calls_to_start(
