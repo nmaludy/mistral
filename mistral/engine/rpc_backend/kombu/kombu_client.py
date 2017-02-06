@@ -15,16 +15,21 @@
 from six import moves
 
 import kombu
+from oslo_config import cfg
 from oslo_log import log as logging
+import oslo_messaging as messaging
 
 from mistral.engine.rpc_backend import base as rpc_base
 from mistral.engine.rpc_backend.kombu import base as kombu_base
+from mistral.engine.rpc_backend.kombu import kombu_hosts
 from mistral.engine.rpc_backend.kombu import kombu_listener
 from mistral import exceptions as exc
 from mistral import utils
 
 
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
+CONF.import_opt('rpc_response_timeout', 'mistral.config')
 
 
 class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
@@ -33,24 +38,39 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
 
         self._register_mistral_serialization()
 
-        self.exchange = conf.get('exchange', '')
-        self.user_id = conf.get('user_id', 'guest')
-        self.password = conf.get('password', 'guest')
-        self.topic = conf.get('topic', 'mistral')
-        self.server_id = conf.get('server_id', '')
-        self.host = conf.get('host', 'localhost')
-        self.port = conf.get('port', 5672)
-        self.virtual_host = conf.get('virtual_host', '/')
-        self.durable_queue = conf.get('durable_queues', False)
-        self.auto_delete = conf.get('auto_delete', False)
-        self._timeout = conf.get('timeout', 60)
-        self.conn = self._make_connection(
-            self.host,
-            self.port,
-            self.user_id,
-            self.password,
-            self.virtual_host
+        self._transport_url = messaging.TransportURL.parse(
+            CONF,
+            CONF.transport_url
         )
+        self._check_backend()
+
+        self.topic = conf.topic
+        self.server_id = conf.host
+
+        self._hosts = kombu_hosts.KombuHosts(CONF)
+
+        self.exchange = CONF.control_exchange
+        self.virtual_host = CONF.oslo_messaging_rabbit.rabbit_virtual_host
+        self.durable_queue = CONF.oslo_messaging_rabbit.amqp_durable_queues
+        self.auto_delete = CONF.oslo_messaging_rabbit.amqp_auto_delete
+        self._timeout = CONF.rpc_response_timeout
+        self.routing_key = self.topic
+
+        hosts = self._hosts.get_hosts()
+
+        self._connections = []
+
+        for host in hosts:
+            conn = self._make_connection(
+                host.hostname,
+                host.port,
+                host.username,
+                host.password,
+                self.virtual_host
+            )
+            self._connections.append(conn)
+
+        self.conn = self._connections[0]
 
         # Create exchange.
         exchange = self._make_exchange(
@@ -71,7 +91,7 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
         )
 
         self._listener = kombu_listener.KombuRPCListener(
-            connection=self.conn,
+            connections=self._connections,
             callback_queue=self.callback_queue
         )
 
@@ -89,7 +109,7 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
         except moves.queue.Empty:
             raise exc.MistralException("RPC Request timeout")
 
-    def _call(self, ctx, method, target, async=False, **kwargs):
+    def _call(self, ctx, method, target, async_=False, **kwargs):
         """Performs a remote call for the given method.
 
         :param ctx: authentication context associated with mistral
@@ -106,13 +126,13 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
             'rpc_ctx': ctx.to_dict(),
             'rpc_method': method,
             'arguments': kwargs,
-            'async': async
+            'async': async_
         }
 
         LOG.debug("Publish request: {0}".format(body))
 
         try:
-            if not async:
+            if not async_:
                 self._listener.add_listener(correlation_id)
 
             # Publish request.
@@ -128,7 +148,7 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
                 )
 
             # Start waiting for response.
-            if async:
+            if async_:
                 return
 
             result = self._wait_for_result(correlation_id)
@@ -138,13 +158,13 @@ class KombuRPCClient(rpc_base.RPCClient, kombu_base.Base):
             if res_type == 'error':
                 raise res_object
         finally:
-            if not async:
+            if not async_:
                 self._listener.remove_listener(correlation_id)
 
         return res_object
 
     def sync_call(self, ctx, method, target=None, **kwargs):
-        return self._call(ctx, method, async=False, target=target, **kwargs)
+        return self._call(ctx, method, async_=False, target=target, **kwargs)
 
     def async_call(self, ctx, method, target=None, **kwargs):
-        return self._call(ctx, method, async=True, target=target, **kwargs)
+        return self._call(ctx, method, async_=True, target=target, **kwargs)

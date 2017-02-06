@@ -13,8 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import itertools
 from kombu.mixins import ConsumerMixin
-from six import moves
+import six
 import threading
 
 from oslo_log import log as logging
@@ -26,14 +27,19 @@ LOG = logging.getLogger(__name__)
 
 class KombuRPCListener(ConsumerMixin):
 
-    def __init__(self, connection, callback_queue):
+    def __init__(self, connections, callback_queue):
         self._results = {}
-        self.connection = connection
+        self._connections = itertools.cycle(connections)
         self._callback_queue = callback_queue
         self._thread = None
+        self.connection = self._connections.next()
+
+        # TODO(ddeja): Those 2 options should be gathered from config.
+        self._sleep_time = 1
+        self._max_sleep_time = 512
 
     def add_listener(self, correlation_id):
-        self._results[correlation_id] = moves.queue.Queue()
+        self._results[correlation_id] = six.moves.queue.Queue()
 
     def remove_listener(self, correlation_id):
         if correlation_id in self._results:
@@ -93,3 +99,11 @@ class KombuRPCListener(ConsumerMixin):
 
     def get_result(self, correlation_id, timeout):
         return self._results[correlation_id].get(block=True, timeout=timeout)
+
+    def on_connection_error(self, exc, interval):
+        self.connection = six.next(self._connections)
+
+        LOG.debug("Broker connection failed: %s" % exc)
+        LOG.debug("Sleeping for %s seconds, then retrying connection" %
+                  interval
+                  )

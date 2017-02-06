@@ -17,12 +17,12 @@ from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_messaging.rpc import client
+from osprofiler import profiler
 from stevedore import driver
 
 from mistral import context as auth_ctx
 from mistral.engine import base
 from mistral import exceptions as exc
-from mistral.utils import rpc_utils
 from mistral.workflow import utils as wf_utils
 
 
@@ -68,9 +68,7 @@ def get_engine_client():
     global _ENGINE_CLIENT
 
     if not _ENGINE_CLIENT:
-        _ENGINE_CLIENT = EngineClient(
-            rpc_utils.get_rpc_info_from_oslo(cfg.CONF.engine)
-        )
+        _ENGINE_CLIENT = EngineClient(cfg.CONF.engine)
 
     return _ENGINE_CLIENT
 
@@ -79,9 +77,7 @@ def get_executor_client():
     global _EXECUTOR_CLIENT
 
     if not _EXECUTOR_CLIENT:
-        _EXECUTOR_CLIENT = ExecutorClient(
-            rpc_utils.get_rpc_info_from_oslo(cfg.CONF.executor)
-        )
+        _EXECUTOR_CLIENT = ExecutorClient(cfg.CONF.executor)
 
     return _EXECUTOR_CLIENT
 
@@ -90,9 +86,7 @@ def get_event_engine_client():
     global _EVENT_ENGINE_CLIENT
 
     if not _EVENT_ENGINE_CLIENT:
-        _EVENT_ENGINE_CLIENT = EventEngineClient(
-            rpc_utils.get_rpc_info_from_oslo(cfg.CONF.event_engine)
-        )
+        _EVENT_ENGINE_CLIENT = EventEngineClient(cfg.CONF.event_engine)
 
     return _EVENT_ENGINE_CLIENT
 
@@ -199,8 +193,9 @@ class EngineClient(base.Engine):
         )
 
     @wrap_messaging_exception
+    @profiler.trace('engine-client-on-action-complete', hide_args=True)
     def on_action_complete(self, action_ex_id, result, wf_action=False,
-                           async=False):
+                           async_=False):
         """Conveys action result to Mistral Engine.
 
         This method should be used by clients of Mistral Engine to update
@@ -223,7 +218,7 @@ class EngineClient(base.Engine):
         :return: Action(or workflow if wf_action=True) execution object.
         """
 
-        call = self._client.async_call if async else self._client.sync_call
+        call = self._client.async_call if async_ else self._client.sync_call
 
         return call(
             auth_ctx.ctx(),
@@ -336,8 +331,9 @@ class ExecutorClient(base.Executor):
         self.topic = cfg.CONF.executor.topic
         self._client = get_rpc_client_driver()(rpc_conf_dict)
 
+    @profiler.trace('executor-client-run-action')
     def run_action(self, action_ex_id, action_class_str, attributes,
-                   action_params, target=None, async=True, safe_rerun=False):
+                   action_params, target=None, async_=True, safe_rerun=False):
         """Sends a request to run action to executor.
 
         :param action_ex_id: Action execution id.
@@ -361,7 +357,7 @@ class ExecutorClient(base.Executor):
         }
 
         rpc_client_method = (self._client.async_call
-                             if async else self._client.sync_call)
+                             if async_ else self._client.sync_call)
 
         res = rpc_client_method(auth_ctx.ctx(), 'run_action', **kwargs)
 

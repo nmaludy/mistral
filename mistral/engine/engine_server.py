@@ -21,8 +21,8 @@ from mistral.engine.rpc_backend import rpc
 from mistral.service import base as service_base
 from mistral.services import expiration_policy
 from mistral.services import scheduler
+from mistral import utils
 from mistral.utils import profiler as profiler_utils
-from mistral.utils import rpc_utils
 from mistral.workflow import utils as wf_utils
 
 LOG = logging.getLogger(__name__)
@@ -57,9 +57,7 @@ class EngineServer(service_base.MistralService):
 
         # Initialize and start RPC server.
 
-        self._rpc_server = rpc.get_rpc_server_driver()(
-            rpc_utils.get_rpc_info_from_oslo(cfg.CONF.engine)
-        )
+        self._rpc_server = rpc.get_rpc_server_driver()(cfg.CONF.engine)
         self._rpc_server.register_endpoint(self)
 
         # Note(ddeja): Engine needs to be run in default (blocking) mode
@@ -96,9 +94,9 @@ class EngineServer(service_base.MistralService):
         LOG.info(
             "Received RPC request 'start_workflow'[rpc_ctx=%s,"
             " workflow_identifier=%s, workflow_input=%s, description=%s, "
-            "params=%s]"
-            % (rpc_ctx, workflow_identifier, workflow_input, description,
-               params)
+            "params=%s]" %
+            (rpc_ctx, workflow_identifier, utils.cut(workflow_input),
+             description, params)
         )
 
         return self.engine.start_workflow(
@@ -122,7 +120,8 @@ class EngineServer(service_base.MistralService):
         LOG.info(
             "Received RPC request 'start_action'[rpc_ctx=%s,"
             " name=%s, input=%s, description=%s, params=%s]"
-            % (rpc_ctx, action_name, action_input, description, params)
+            % (rpc_ctx, action_name, utils.cut(action_input),
+               description, params)
         )
 
         return self.engine.start_action(
@@ -148,7 +147,8 @@ class EngineServer(service_base.MistralService):
 
         LOG.info(
             "Received RPC request 'on_action_complete'[rpc_ctx=%s,"
-            " action_ex_id=%s, result=%s]" % (rpc_ctx, action_ex_id, result)
+            " action_ex_id=%s, result=%s]" %
+            (rpc_ctx, action_ex_id, result.cut_repr())
         )
 
         return self.engine.on_action_complete(action_ex_id, result, wf_action)
@@ -219,7 +219,8 @@ class EngineServer(service_base.MistralService):
 
         LOG.info(
             "Received RPC request 'stop_workflow'[rpc_ctx=%s, execution_id=%s,"
-            " state=%s, message=%s]" % (rpc_ctx, execution_id, state, message)
+            " state=%s, message=%s]" %
+            (rpc_ctx, execution_id, state, message)
         )
 
         return self.engine.stop_workflow(execution_id, state, message)
