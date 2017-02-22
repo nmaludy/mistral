@@ -1,60 +1,136 @@
-# The order of packages is significant, because pip processes them in the order
-# of appearance. Changing the order has an impact on the overall integration
-# process, which may cause wedges in the gate later.
-
-alembic>=0.8.10 # MIT
-aodhclient>=0.7.0 # Apache-2.0
-Babel>=2.3.4 # BSD
-croniter>=0.3.4 # MIT License
-cachetools>=1.1.0 # MIT License
-eventlet!=0.18.3,>=0.18.2 # MIT
-gnocchiclient>=2.7.0 # Apache-2.0
-Jinja2!=2.9.0,!=2.9.1,!=2.9.2,!=2.9.3,!=2.9.4,>=2.8 # BSD License (3 clause)
-jsonschema!=2.5.0,<3.0.0,>=2.0.0 # MIT
-keystonemiddleware>=4.12.0 # Apache-2.0
-networkx>=1.10 # BSD
-oslo.concurrency>=3.8.0 # Apache-2.0
-oslo.config!=3.18.0,>=3.14.0 # Apache-2.0
-oslo.db>=4.15.0 # Apache-2.0
-oslo.i18n>=2.1.0 # Apache-2.0
-oslo.messaging>=5.14.0 # Apache-2.0
-oslo.middleware>=3.0.0 # Apache-2.0
-oslo.policy>=1.17.0 # Apache-2.0
-oslo.utils>=3.18.0 # Apache-2.0
-oslo.log>=3.11.0 # Apache-2.0
-oslo.serialization>=1.10.0 # Apache-2.0
-oslo.service>=1.10.0 # Apache-2.0
-osprofiler>=1.4.0 # Apache-2.0
-paramiko>=2.0 # LGPLv2.1+
-pbr>=1.8 # Apache-2.0
-pecan!=1.0.2,!=1.0.3,!=1.0.4,!=1.2,>=1.0.0 # BSD
-python-barbicanclient>=4.0.0 # Apache-2.0
-python-ceilometerclient>=2.5.0 # Apache-2.0
-python-cinderclient!=1.7.0,!=1.7.1,>=1.6.0 # Apache-2.0
-python-designateclient>=1.5.0 # Apache-2.0
-python-glanceclient>=2.5.0 # Apache-2.0
-python-heatclient>=1.6.1 # Apache-2.0
-python-keystoneclient>=3.8.0 # Apache-2.0
-python-mistralclient>=2.0.0 # Apache-2.0
-python-magnumclient>=2.0.0 # Apache-2.0
-python-muranoclient>=0.8.2 # Apache-2.0
-python-neutronclient>=5.1.0 # Apache-2.0
-python-novaclient!=7.0.0,>=6.0.0 # Apache-2.0
-python-senlinclient>=1.1.0 # Apache-2.0
-python-swiftclient>=3.2.0 # Apache-2.0
-python-tackerclient>=0.8.0 # Apache-2.0
-python-troveclient>=2.2.0 # Apache-2.0
-python-ironicclient>=1.11.0 # Apache-2.0
-python-ironic-inspector-client>=1.5.0 # Apache-2.0
-python-zaqarclient>=1.0.0 # Apache-2.0
-PyYAML>=3.10.0 # MIT
-requests!=2.12.2,>=2.10.0 # Apache-2.0
-tenacity>=3.2.1 # Apache-2.0
-setuptools!=24.0.0,>=16.0 # PSF/ZPL
-six>=1.9.0 # MIT
-SQLAlchemy<1.1.0,>=1.0.10 # MIT
-stevedore>=1.17.1 # Apache-2.0
-WSME>=0.8 # MIT
-yaql>=1.1.0 # Apache 2.0 License
-tooz>=1.47.0 # Apache-2.0
-zake>=0.1.6 # Apache-2.0
+alembic==0.8.10
+amqp==1.4.9
+anyjson==0.3.3
+aodhclient==0.8.0
+appdirs==1.4.0
+Babel==2.3.4
+beautifulsoup4==4.5.3
+cachetools==2.0.0
+cffi==1.9.1
+cliff==2.4.0
+cmd2==0.6.9
+contextlib2==0.5.4
+croniter==0.3.15
+cryptography==1.7.2
+debtcollector==1.11.0
+decorator==4.0.11
+dogpile.cache==0.6.2
+enum-compat==0.0.2
+enum34==1.1.6
+eventlet==0.20.1
+fasteners==0.14.1
+funcsigs==1.0.2
+functools32==3.2.3.post2
+futures==3.0.5
+futurist==0.21.0
+gnocchiclient==3.1.0
+greenlet==0.4.12
+gunicorn==19.6.0
+idna==2.2
+ipaddress==1.0.18
+iso8601==0.1.11
+Jinja2==2.9.5
+jsonpatch==1.15
+jsonpointer==1.10
+jsonschema==2.6.0
+kazoo==2.2.1
+keystoneauth1==2.18.0
+keystonemiddleware==4.14.0
+kombu==3.0.37
+logutils==0.3.4.1
+Mako==1.0.6
+MarkupSafe==0.23
+monotonic==1.2
+msgpack-python==0.4.8
+murano-pkg-check==0.3.0
+netaddr==0.7.19
+netifaces==0.10.5
+networkx==1.11
+openstacksdk==0.9.13
+os-client-config==1.26.0
+osc-lib==1.3.0
+oslo.concurrency==3.18.0
+oslo.config==3.22.0
+oslo.context==2.12.1
+oslo.db==4.17.0
+oslo.i18n==3.12.0
+oslo.log==3.20.0
+oslo.messaging==5.17.0
+oslo.middleware==3.23.1
+oslo.policy==1.18.0
+oslo.serialization==2.16.0
+oslo.service==1.19.0
+oslo.utils==3.22.0
+oslosphinx==4.10.0
+osprofiler==1.5.0
+packaging==16.8
+paramiko==2.1.2
+Paste==2.0.3
+PasteDeploy==1.5.2
+pbr==1.10.0
+pecan==1.2.1
+pika==0.10.0
+pika-pool==0.1.3
+ply==3.10
+positional==1.1.1
+prettytable==0.7.2
+psycopg2==2.6.2
+pyasn1==0.2.2
+pycadf==2.5.0
+pycparser==2.17
+pyinotify==0.9.6
+pyOpenSSL==16.2.0
+pyparsing==2.1.10
+python-barbicanclient==4.2.0
+python-ceilometerclient==2.8.0
+python-cinderclient==1.11.0
+python-dateutil==2.6.0
+python-designateclient==2.6.0
+python-editor==1.0.3
+python-glanceclient==2.6.0
+python-heatclient==1.8.0
+python-ironic-inspector-client==1.11.0
+python-ironicclient==1.11.0
+python-keystoneclient==3.10.0
+python-magnumclient==2.5.0
+python-muranoclient==0.12.0
+python-neutronclient==6.1.0
+python-novaclient==7.1.0
+python-openstackclient==3.8.1
+python-senlinclient==1.2.0
+python-swiftclient==3.3.0
+python-tackerclient==0.9.0
+python-troveclient==2.8.0
+python-zaqarclient==1.4.0
+pytz==2016.10
+PyYAML==3.12
+repoze.lru==0.6
+requests==2.13.0
+requestsexceptions==1.1.3
+retrying==1.3.3
+rfc3986==0.4.1
+Routes==2.4.1
+semantic-version==2.6.0
+simplegeneric==0.8.1
+simplejson==3.10.0
+singledispatch==3.4.0.3
+six==1.10.0
+SQLAlchemy==1.0.17
+sqlalchemy-migrate==0.10.0
+sqlparse==0.2.2
+statsd==3.2.1
+stevedore==1.20.0
+Tempita==0.5.2
+tenacity==3.7.1
+tooz==1.48.0
+unicodecsv==0.14.1
+voluptuous==0.9.3
+waitress==1.0.2
+warlock==1.2.0
+WebOb==1.7.1
+WebTest==2.0.25
+wrapt==1.10.8
+WSME==0.9.2
+yaql==1.1.2
+zake==0.2.2
+git+https://github.com/StackStorm/python-mistralclient.git@st2-2.2.0#egg=python-mistralclient
