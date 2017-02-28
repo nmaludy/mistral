@@ -26,6 +26,7 @@ from pecan import hooks
 
 from mistral import auth
 from mistral import exceptions as exc
+from mistral import serialization
 from mistral import utils
 
 LOG = logging.getLogger(__name__)
@@ -225,27 +226,23 @@ def context_from_config():
     )
 
 
-class JsonPayloadSerializer(messaging.NoOpSerializer):
-    @staticmethod
-    def serialize_entity(context, entity):
-        return jsonutils.to_primitive(entity, convert_instances=True)
-
-
 class RpcContextSerializer(messaging.Serializer):
-    def __init__(self, base=None):
-        self._base = base or messaging.NoOpSerializer()
+    def __init__(self, entity_serializer=None):
+        self.entity_serializer = (
+            entity_serializer or serialization.get_polymorphic_serializer()
+        )
 
     def serialize_entity(self, context, entity):
-        if not self._base:
+        if not self.entity_serializer:
             return entity
 
-        return self._base.serialize_entity(context, entity)
+        return self.entity_serializer.serialize(entity)
 
     def deserialize_entity(self, context, entity):
-        if not self._base:
+        if not self.entity_serializer:
             return entity
 
-        return self._base.deserialize_entity(context, entity)
+        return self.entity_serializer.deserialize(entity)
 
     def serialize_context(self, context):
         ctx = context.to_dict()
