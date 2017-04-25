@@ -193,8 +193,8 @@ def cut_dict(d, length=100):
     idx = 0
 
     for key, value in d.items():
-        k = str(key)
-        v = str(value)
+        k = unicode(key)
+        v = unicode(value)
 
         # Processing key.
         new_len = len(res) + len(k)
