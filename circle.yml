@@ -18,8 +18,8 @@ general:
 
 machine:
   environment:
-    DISTROS: "wheezy jessie trusty xenial el6 el7"
-    NOTESTS: "el7"
+    DISTROS: "trusty xenial el6 el7"
+    NOTESTS: "xenial el7"
     ST2_PACKAGES_REPO: https://github.com/StackStorm/st2-packages
     # XXX: Set this to 'vX.Y' for release branches
     ST2_PACKAGES_BRANCH: master
