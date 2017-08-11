@@ -21,6 +21,11 @@ else
     MISTRAL_BIN_DIR=$(get_python_exec_prefix)
 fi
 
+# Toggle for deploying Mistral API under HTTPD + mod_wsgi
+MISTRAL_USE_MOD_WSGI=${MISTRAL_USE_MOD_WSGI:-True}
+
+MISTRAL_FILES_DIR=$MISTRAL_DIR/devstack/files
+
 # create_mistral_accounts - Set up common required mistral accounts
 #
 # Tenant      User       Roles
@@ -54,6 +59,11 @@ function mkdir_chown_stack {
 
 # configure_mistral - Set config files, create data dirs, etc
 function configure_mistral {
+
+    # create and clean up auth cache dir
+    mkdir_chown_stack "$MISTRAL_AUTH_CACHE_DIR"
+    rm -f "$MISTRAL_AUTH_CACHE_DIR"/*
+
     mkdir_chown_stack "$MISTRAL_CONF_DIR"
 
     # Generate Mistral configuration file and configure common parameters.
@@ -70,17 +80,11 @@ function configure_mistral {
     #-------------------------
 
     # Setup keystone_authtoken section
-    iniset $MISTRAL_CONF_FILE keystone_authtoken auth_host $KEYSTONE_AUTH_HOST
-    iniset $MISTRAL_CONF_FILE keystone_authtoken auth_port $KEYSTONE_AUTH_PORT
-    iniset $MISTRAL_CONF_FILE keystone_authtoken auth_protocol $KEYSTONE_AUTH_PROTOCOL
-    iniset $MISTRAL_CONF_FILE keystone_authtoken admin_tenant_name $SERVICE_TENANT_NAME
-    iniset $MISTRAL_CONF_FILE keystone_authtoken admin_user $MISTRAL_ADMIN_USER
-    iniset $MISTRAL_CONF_FILE keystone_authtoken admin_password $SERVICE_PASSWORD
-    iniset $MISTRAL_CONF_FILE keystone_authtoken auth_uri "http://${KEYSTONE_AUTH_HOST}:5000/v3"
+    configure_auth_token_middleware $MISTRAL_CONF_FILE mistral $MISTRAL_AUTH_CACHE_DIR
+    iniset $MISTRAL_CONF_FILE keystone_authtoken auth_uri $KEYSTONE_AUTH_URI_V3
 
     # Setup RabbitMQ credentials
-    iniset $MISTRAL_CONF_FILE oslo_messaging_rabbit rabbit_userid $RABBIT_USERID
-    iniset $MISTRAL_CONF_FILE oslo_messaging_rabbit rabbit_password $RABBIT_PASSWORD
+    iniset_rpc_backend mistral $MISTRAL_CONF_FILE
 
     # Configure the database.
     iniset $MISTRAL_CONF_FILE database connection `database_connection_url mistral`
@@ -99,6 +103,10 @@ function configure_mistral {
 
     if [ "$MISTRAL_RPC_IMPLEMENTATION" ]; then
         iniset $MISTRAL_CONF_FILE DEFAULT rpc_implementation $MISTRAL_RPC_IMPLEMENTATION
+    fi
+
+    if [ "$MISTRAL_USE_MOD_WSGI" == "True" ]; then
+        _config_mistral_apache_wsgi
     fi
 }
 
@@ -120,6 +128,10 @@ function install_mistral {
 
     if is_service_enabled horizon; then
         _install_mistraldashboard
+    fi
+
+    if [ "$MISTRAL_USE_MOD_WSGI" == "True" ]; then
+        install_apache_wsgi
     fi
 }
 
@@ -145,9 +157,19 @@ function install_mistral_pythonclient {
 
 # start_mistral - Start running processes, including screen
 function start_mistral {
+    # If the site is not enabled then we are in a grenade scenario
+    local enabled_site_file
+    enabled_site_file=$(apache_site_config_for mistral-api)
+
     if is_service_enabled mistral-api && is_service_enabled mistral-engine && is_service_enabled mistral-executor && is_service_enabled mistral-event-engine ; then
         echo_summary "Installing all mistral services in separate processes"
-        run_process mistral-api "$MISTRAL_BIN_DIR/mistral-server --server api --config-file $MISTRAL_CONF_DIR/mistral.conf"
+        if [ -f ${enabled_site_file} ] && [ "$MISTRAL_USE_MOD_WSGI" == "True" ]; then
+            enable_apache_site mistral-api
+            restart_apache_server
+            tail_log mistral-api /var/log/$APACHE_NAME/mistral_api.log
+        else
+            run_process mistral-api "$MISTRAL_BIN_DIR/mistral-server --server api --config-file $MISTRAL_CONF_DIR/mistral.conf"
+        fi
         run_process mistral-engine "$MISTRAL_BIN_DIR/mistral-server --server engine --config-file $MISTRAL_CONF_DIR/mistral.conf"
         run_process mistral-executor "$MISTRAL_BIN_DIR/mistral-server --server executor --config-file $MISTRAL_CONF_DIR/mistral.conf"
         run_process mistral-event-engine "$MISTRAL_BIN_DIR/mistral-server --server event-engine --config-file $MISTRAL_CONF_DIR/mistral.conf"
@@ -161,9 +183,17 @@ function start_mistral {
 # stop_mistral - Stop running processes
 function stop_mistral {
     # Kill the Mistral screen windows
-    for serv in mistral mistral-api mistral-engine mistral-executor mistral-event-engine; do
+    local serv
+    for serv in mistral mistral-engine mistral-executor mistral-event-engine; do
         stop_process $serv
     done
+
+    if [ "$MISTRAL_USE_MOD_WSGI" == "True" ]; then
+        disable_apache_site mistral-api
+        restart_apache_server
+    else
+        stop_process mistral-api
+    fi
 }
 
 
@@ -171,6 +201,11 @@ function cleanup_mistral {
     if is_service_enabled horizon; then
         _mistral_cleanup_mistraldashboard
     fi
+
+    if [ "$MISTRAL_USE_MOD_WSGI" == "True" ]; then
+        _mistral_cleanup_apache_wsgi
+    fi
+    sudo rm -rf $MISTRAL_CONF_DIR
 }
 
 
@@ -178,6 +213,33 @@ function _mistral_cleanup_mistraldashboard {
     rm -f $HORIZON_DIR/openstack_dashboard/local/enabled/_50_mistral.py
 }
 
+function _mistral_cleanup_apache_wsgi {
+    sudo rm -f $(apache_site_config_for mistral-api)
+}
+
+# _config_mistral_apache_wsgi() - Set WSGI config files for Mistral
+function _config_mistral_apache_wsgi {
+    local mistral_apache_conf
+    mistral_apache_conf=$(apache_site_config_for mistral-api)
+    local mistral_ssl=""
+    local mistral_certfile=""
+    local mistral_keyfile=""
+    local mistral_api_port=$MISTRAL_SERVICE_PORT
+    local venv_path=""
+
+    sudo cp $MISTRAL_FILES_DIR/apache-mistral-api.template $mistral_apache_conf
+    sudo sed -e "
+        s|%PUBLICPORT%|$mistral_api_port|g;
+        s|%APACHE_NAME%|$APACHE_NAME|g;
+        s|%MISTRAL_BIN_DIR%|$MISTRAL_BIN_DIR|g;
+        s|%API_WORKERS%|$API_WORKERS|g;
+        s|%SSLENGINE%|$mistral_ssl|g;
+        s|%SSLCERTFILE%|$mistral_certfile|g;
+        s|%SSLKEYFILE%|$mistral_keyfile|g;
+        s|%USER%|$STACK_USER|g;
+        s|%VIRTUALENV%|$venv_path|g
+    " -i $mistral_apache_conf
+}
 
 if is_service_enabled mistral; then
     if [[ "$1" == "stack" && "$2" == "install" ]]; then
@@ -186,8 +248,8 @@ if is_service_enabled mistral; then
         install_mistral_pythonclient
     elif [[ "$1" == "stack" && "$2" == "post-config" ]]; then
         echo_summary "Configuring mistral"
-        configure_mistral
         create_mistral_accounts
+        configure_mistral
     elif [[ "$1" == "stack" && "$2" == "extra" ]]; then
         echo_summary "Initializing mistral"
         init_mistral

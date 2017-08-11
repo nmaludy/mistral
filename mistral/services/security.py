@@ -13,11 +13,13 @@
 #    limitations under the License.
 
 from oslo_config import cfg
+from oslo_log import log as logging
 
 from mistral import context as auth_ctx
 from mistral.utils.openstack import keystone
 
 
+LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
 # Make sure to import 'auth_enable' option before using it.
@@ -40,8 +42,7 @@ def create_trust():
 
     ctx = auth_ctx.ctx()
 
-    trustee_id = keystone.client_for_admin(
-        CONF.keystone_authtoken.admin_tenant_name).user_id
+    trustee_id = keystone.client_for_admin().session.get_user_id()
 
     return client.trusts.create(
         trustor_user=client.user_id,
@@ -63,32 +64,50 @@ def create_context(trust_id, project_id):
     if CONF.pecan.auth_enable:
         client = keystone.client_for_trusts(trust_id)
 
+        if client.session:
+            # Method get_token is deprecated, using get_auth_headers.
+            token = client.session.get_auth_headers().get('X-Auth-Token')
+            user_id = client.session.get_user_id()
+        else:
+            token = client.auth_token
+            user_id = client.user_id
+
         return auth_ctx.MistralContext(
-            user_id=client.user_id,
-            project_id=project_id,
-            auth_token=client.auth_token,
+            user=user_id,
+            tenant=project_id,
+            auth_token=token,
             is_trust_scoped=True,
             trust_id=trust_id,
         )
 
     return auth_ctx.MistralContext(
-        user_id=None,
-        project_id=None,
+        user=None,
+        tenant=None,
         auth_token=None,
         is_admin=True
     )
 
 
-def delete_trust(workbook):
-    if not workbook.trust_id:
+def delete_trust(trust_id=None):
+    if not trust_id:
+        # Try to retrieve trust from context.
+        if auth_ctx.has_ctx():
+            trust_id = auth_ctx.ctx().trust_id
+
+    if not trust_id:
         return
 
-    keystone_client = keystone.client_for_trusts(workbook.trust_id)
-    keystone_client.trusts.delete(workbook.trust_id)
+    keystone_client = keystone.client_for_trusts(trust_id)
+
+    try:
+        keystone_client.trusts.delete(trust_id)
+    except Exception as e:
+        LOG.warning("Failed to delete trust [id=%s]: %s", trust_id, e)
 
 
 def add_trust_id(secure_object_values):
     if cfg.CONF.pecan.auth_enable:
+        trust = create_trust()
         secure_object_values.update({
-            'trust_id': create_trust().id
+            'trust_id': trust.id
         })

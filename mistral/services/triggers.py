@@ -14,15 +14,20 @@
 
 import croniter
 import datetime
+import json
 import six
-import time
+
+from oslo_log import log as logging
 
 from mistral.db.v2 import api as db_api
-from mistral.engine.rpc_backend import rpc
 from mistral.engine import utils as eng_utils
 from mistral import exceptions as exc
+from mistral.lang import parser
+from mistral.rpc import clients as rpc
 from mistral.services import security
-from mistral.workbook import parser
+
+
+LOG = logging.getLogger(__name__)
 
 
 def get_next_execution_time(pattern, start_time):
@@ -45,10 +50,8 @@ def validate_cron_trigger_input(pattern, first_time, count):
             'Pattern or first_execution_time must be specified.'
         )
     if first_time:
-        first_second = time.mktime(first_time.timetuple())
-        first_utc_time = datetime.datetime.utcfromtimestamp(first_second)
-        sum_time = datetime.datetime.utcnow() + datetime.timedelta(0, 60)
-        if sum_time > first_utc_time:
+        valid_min_time = datetime.datetime.utcnow() + datetime.timedelta(0, 60)
+        if valid_min_time > first_time:
             raise exc.InvalidModelException(
                 'first_execution_time must be at least 1 minute in the future.'
             )
@@ -78,7 +81,7 @@ def create_cron_trigger(name, workflow_name, workflow_input,
                 '%Y-%m-%d %H:%M'
             )
         except ValueError as e:
-            raise exc.InvalidModelException(e.message)
+            raise exc.InvalidModelException(str(e))
 
     validate_cron_trigger_input(pattern, first_time, count)
 
@@ -95,13 +98,20 @@ def create_cron_trigger(name, workflow_name, workflow_input,
             workflow_id if workflow_id else workflow_name
         )
 
-        eng_utils.validate_input(
-            wf_def,
-            workflow_input or {},
-            parser.get_workflow_spec(wf_def.spec)
+        wf_spec = parser.get_workflow_spec_by_definition_id(
+            wf_def.id,
+            wf_def.updated_at
         )
 
-        values = {
+        # TODO(rakhmerov): Use Workflow object here instead of utils.
+        eng_utils.validate_input(
+            wf_spec.get_input(),
+            workflow_input,
+            wf_spec.get_name(),
+            wf_spec.__class__.__name__
+        )
+
+        trigger_parameters = {
             'name': name,
             'pattern': pattern,
             'first_execution_time': first_time,
@@ -114,25 +124,49 @@ def create_cron_trigger(name, workflow_name, workflow_input,
             'scope': 'private'
         }
 
-        security.add_trust_id(values)
+        security.add_trust_id(trigger_parameters)
 
-        trig = db_api.create_cron_trigger(values)
+        try:
+            trig = db_api.create_cron_trigger(trigger_parameters)
+        except Exception:
+            # Delete trust before raising exception.
+            security.delete_trust(trigger_parameters.get('trust_id'))
+            raise
 
     return trig
 
 
+def delete_cron_trigger(name, trust_id=None, delete_trust=True):
+    if not trust_id:
+        trigger = db_api.get_cron_trigger(name)
+        trust_id = trigger.trust_id
+
+    modified_count = db_api.delete_cron_trigger(name)
+
+    if modified_count and delete_trust:
+        # Delete trust only together with deleting trigger.
+        security.delete_trust(trust_id)
+
+    return modified_count
+
+
 def create_event_trigger(name, exchange, topic, event, workflow_id,
-                         workflow_input=None, workflow_params=None):
+                         scope='private', workflow_input=None,
+                         workflow_params=None):
     with db_api.transaction():
         wf_def = db_api.get_workflow_definition_by_id(workflow_id)
 
+        wf_spec = parser.get_workflow_spec_by_definition_id(
+            wf_def.id,
+            wf_def.updated_at
+        )
+
+        # TODO(rakhmerov): Use Workflow object here instead of utils.
         eng_utils.validate_input(
-            wf_def,
-            workflow_input or {},
-            parser.get_workflow_spec_by_definition_id(
-                wf_def.id,
-                wf_def.updated_at
-            )
+            wf_spec.get_input(),
+            workflow_input,
+            wf_spec.get_name(),
+            wf_spec.__class__.__name__
         )
 
         values = {
@@ -143,6 +177,7 @@ def create_event_trigger(name, exchange, topic, event, workflow_id,
             'exchange': exchange,
             'topic': topic,
             'event': event,
+            'scope': scope,
         }
 
         security.add_trust_id(values)
@@ -155,8 +190,11 @@ def create_event_trigger(name, exchange, topic, event, workflow_id,
 
         # NOTE(kong): Send RPC message within the db transaction, rollback if
         # any error occurs.
+        trig_dict = trig.to_dict()
+        trig_dict['workflow_namespace'] = wf_def.namespace
+
         rpc.get_event_engine_client().create_event_trigger(
-            trig.to_dict(),
+            trig_dict,
             events
         )
 
@@ -189,3 +227,29 @@ def update_event_trigger(id, values):
     rpc.get_event_engine_client().update_event_trigger(trig.to_dict())
 
     return trig
+
+
+def on_workflow_complete(wf_ex):
+    if wf_ex.task_execution_id:
+        return
+
+    try:
+        description = json.loads(wf_ex.description)
+    except ValueError as e:
+        LOG.debug(str(e))
+        return
+
+    if not isinstance(description, dict):
+        return
+
+    triggered = description.get('triggered_by')
+
+    if not triggered:
+        return
+
+    if triggered['type'] == 'cron_trigger':
+        if not db_api.load_cron_trigger(triggered['name']):
+            security.delete_trust()
+    elif triggered['type'] == 'event_trigger':
+        if not db_api.load_event_trigger(triggered['id'], True):
+            security.delete_trust()

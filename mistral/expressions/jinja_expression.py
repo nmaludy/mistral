@@ -16,6 +16,7 @@ import re
 
 import jinja2
 from jinja2 import parser as jinja_parse
+from jinja2.sandbox import SandboxedEnvironment
 from oslo_log import log as logging
 import six
 
@@ -29,7 +30,7 @@ LOG = logging.getLogger(__name__)
 JINJA_REGEXP = '({{(.*)}})'
 JINJA_BLOCK_REGEXP = '({%(.*)%})'
 
-_environment = jinja2.Environment(
+_environment = SandboxedEnvironment(
     undefined=jinja2.StrictUndefined,
     trim_blocks=True,
     lstrip_blocks=True
@@ -46,11 +47,6 @@ class JinjaEvaluator(Evaluator):
 
     @classmethod
     def validate(cls, expression):
-        LOG.debug(
-            "Validating Jinja expression [expression='%s']",
-            expression
-        )
-
         if not isinstance(expression, six.string_types):
             raise exc.JinjaEvaluationException(
                 "Unsupported type '%s'." % type(expression)
@@ -67,11 +63,6 @@ class JinjaEvaluator(Evaluator):
 
     @classmethod
     def evaluate(cls, expression, data_context):
-        LOG.debug(
-            "Evaluating Jinja expression [expression='%s', context=%s]"
-            % (expression, data_context)
-        )
-
         opts = {'undefined_to_none': False}
 
         ctx = expression_utils.get_jinja_context(data_context)
@@ -88,8 +79,6 @@ class JinjaEvaluator(Evaluator):
                 "Can not evaluate Jinja expression [expression=%s, error=%s"
                 ", data=%s]" % (expression, str(e), data_context)
             )
-
-        LOG.debug("Jinja expression result: %s" % result)
 
         return result
 
@@ -110,11 +99,6 @@ class InlineJinjaEvaluator(Evaluator):
 
     @classmethod
     def validate(cls, expression):
-        LOG.debug(
-            "Validating Jinja expression [expression='%s']",
-            expression
-        )
-
         if not isinstance(expression, six.string_types):
             raise exc.JinjaEvaluationException(
                 "Unsupported type '%s'." % type(expression)
@@ -130,8 +114,10 @@ class InlineJinjaEvaluator(Evaluator):
     @classmethod
     def evaluate(cls, expression, data_context):
         LOG.debug(
-            "Evaluating Jinja expression [expression='%s', context=%s]"
-            % (expression, data_context)
+            "Start to evaluate Jinja expression. "
+            "[expression='%s', context=%s]",
+            expression,
+            data_context
         )
 
         patterns = cls.find_expression_pattern.findall(expression)
@@ -142,7 +128,11 @@ class InlineJinjaEvaluator(Evaluator):
             ctx = expression_utils.get_jinja_context(data_context)
             result = cls._env.from_string(expression).render(**ctx)
 
-            LOG.debug("Jinja expression result: %s" % result)
+        LOG.debug(
+            "Finished evaluation. [expression='%s', result: %s]",
+            expression,
+            result
+        )
 
         return result
 

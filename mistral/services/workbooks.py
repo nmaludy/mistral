@@ -13,8 +13,8 @@
 #    limitations under the License.
 
 from mistral.db.v2 import api as db_api_v2
+from mistral.lang import parser as spec_parser
 from mistral.services import actions
-from mistral.workbook import parser as spec_parser
 
 
 def create_workbook_v2(definition, scope='private'):
@@ -99,6 +99,7 @@ def _create_or_update_workflows(wb_db, workflows_spec):
                 'spec': wf_spec.to_dict(),
                 'scope': wb_db.scope,
                 'project_id': wb_db.project_id,
+                'namespace': '',
                 'tags': wf_spec.get_tags()
             }
 

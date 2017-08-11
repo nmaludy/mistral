@@ -16,6 +16,8 @@ import json
 
 from wsme import types as wtypes
 
+from mistral import utils
+
 
 class Resource(wtypes.Base):
     """REST API Resource."""
@@ -27,20 +29,30 @@ class Resource(wtypes.Base):
 
         for attr in self._wsme_attributes:
             attr_val = getattr(self, attr.name)
+
             if not isinstance(attr_val, wtypes.UnsetType):
                 d[attr.name] = attr_val
 
         return d
 
     @classmethod
-    def from_dict(cls, d):
+    def from_tuples(cls, tuple_iterator):
         obj = cls()
 
-        for key, val in d.items():
-            if hasattr(obj, key):
-                setattr(obj, key, val)
+        for col_name, col_val in tuple_iterator:
+            if hasattr(obj, col_name):
+                # Convert all datetime values to strings.
+                setattr(obj, col_name, utils.datetime_to_str(col_val))
 
         return obj
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls.from_tuples(d.items())
+
+    @classmethod
+    def from_db_model(cls, db_model):
+        return cls.from_tuples(db_model.iter_columns())
 
     def __str__(self):
         """WSME based implementation of __str__."""
@@ -81,18 +93,18 @@ class ResourceList(Resource):
     @classmethod
     def convert_with_links(cls, resources, limit, url=None, fields=None,
                            **kwargs):
-        resource_collection = cls()
+        resource_list = cls()
 
-        setattr(resource_collection, resource_collection._type, resources)
+        setattr(resource_list, resource_list._type, resources)
 
-        resource_collection.next = resource_collection.get_next(
+        resource_list.next = resource_list.get_next(
             limit,
             url=url,
             fields=fields,
             **kwargs
         )
 
-        return resource_collection
+        return resource_list
 
     def has_next(self, limit):
         """Return whether resources has more items."""

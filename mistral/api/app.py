@@ -22,7 +22,7 @@ from mistral.api import access_control
 from mistral import config as m_config
 from mistral import context as ctx
 from mistral.db.v2 import api as db_api_v2
-from mistral.engine.rpc_backend import rpc
+from mistral.rpc import base as rpc
 from mistral.service import coordination
 from mistral.services import periodic
 
@@ -83,3 +83,12 @@ def setup_app(config=None):
     # Create a CORS wrapper, and attach mistral-specific defaults that must be
     # included in all CORS responses.
     return cors_middleware.CORS(app, cfg.CONF)
+
+
+def init_wsgi():
+    # By default, oslo.config parses the CLI args if no args is provided.
+    # As a result, invoking this wsgi script from gunicorn leads to the error
+    # with argparse complaining that the CLI options have already been parsed.
+    m_config.parse_args(args=[])
+
+    return setup_app()

@@ -19,10 +19,10 @@ from oslo_config import cfg
 
 from mistral.db.v2.sqlalchemy import api as db_api
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
 from mistral.services import workflows as wf_service
 from mistral.tests.unit import base
 from mistral import utils
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import states
 
 
@@ -170,7 +170,7 @@ class WorkflowServiceTest(base.DbTestCase):
             WORKFLOW
         )
 
-        self.assertIn("Workflow not found", exception.message)
+        self.assertIn("Workflow not found", str(exception))
 
     def test_invalid_workflow_list(self):
         exception = self.assertRaises(
@@ -179,7 +179,7 @@ class WorkflowServiceTest(base.DbTestCase):
             INVALID_WORKFLOW
         )
 
-        self.assertIn("Invalid DSL", exception.message)
+        self.assertIn("Invalid DSL", str(exception))
 
     def test_update_workflow_execution_env(self):
         wf_exec_template = {

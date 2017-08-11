@@ -27,10 +27,10 @@ from mistral.api.controllers.v2 import validation
 from mistral.api.hooks import content_type as ct_hook
 from mistral import context
 from mistral.db.v2 import api as db_api
+from mistral.lang import parser as spec_parser
 from mistral.services import workbooks
 from mistral.utils import filter_utils
 from mistral.utils import rest_utils
-from mistral.workbook import parser as spec_parser
 
 
 LOG = logging.getLogger(__name__)
@@ -45,14 +45,17 @@ class WorkbooksController(rest.RestController, hooks.HookController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.Workbook, wtypes.text)
     def get(self, name):
-        """Return the named workbook."""
+        """Return the named workbook.
+
+        :param name: Name of workbook to retrieve
+        """
         acl.enforce('workbooks:get', context.ctx())
 
-        LOG.info("Fetch workbook [name=%s]" % name)
+        LOG.info("Fetch workbook [name=%s]", name)
 
         db_model = db_api.get_workbook(name)
 
-        return resources.Workbook.from_dict(db_model.to_dict())
+        return resources.Workbook.from_db_model(db_model)
 
     @rest_utils.wrap_pecan_controller_exception
     @pecan.expose(content_type="text/plain")
@@ -62,11 +65,11 @@ class WorkbooksController(rest.RestController, hooks.HookController):
 
         definition = pecan.request.text
 
-        LOG.info("Update workbook [definition=%s]" % definition)
+        LOG.info("Update workbook [definition=%s]", definition)
 
         wb_db = workbooks.update_workbook_v2(definition)
 
-        return resources.Workbook.from_dict(wb_db.to_dict()).to_json()
+        return resources.Workbook.from_db_model(wb_db).to_json()
 
     @rest_utils.wrap_pecan_controller_exception
     @pecan.expose(content_type="text/plain")
@@ -76,20 +79,24 @@ class WorkbooksController(rest.RestController, hooks.HookController):
 
         definition = pecan.request.text
 
-        LOG.info("Create workbook [definition=%s]" % definition)
+        LOG.info("Create workbook [definition=%s]", definition)
 
         wb_db = workbooks.create_workbook_v2(definition)
+
         pecan.response.status = 201
 
-        return resources.Workbook.from_dict(wb_db.to_dict()).to_json()
+        return resources.Workbook.from_db_model(wb_db).to_json()
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
     def delete(self, name):
-        """Delete the named workbook."""
+        """Delete the named workbook.
+
+        :param name: Name of workbook to delete
+        """
         acl.enforce('workbooks:delete', context.ctx())
 
-        LOG.info("Delete workbook [name=%s]" % name)
+        LOG.info("Delete workbook [name=%s]", name)
 
         db_api.delete_workbook(name)
 
@@ -126,9 +133,6 @@ class WorkbooksController(rest.RestController, hooks.HookController):
                            time and date.
         :param updated_at: Optional. Keep only resources with specific latest
                            update time and date.
-
-        Where project_id is the same as the requester or
-        project_id is different but the scope is public.
         """
         acl.enforce('workbooks:list', context.ctx())
 

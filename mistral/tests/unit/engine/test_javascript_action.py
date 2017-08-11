@@ -64,15 +64,12 @@ def fake_evaluate(_, context):
 
 
 class JavaScriptEngineTest(base.EngineTestCase):
-    def setUp(self):
-        super(JavaScriptEngineTest, self).setUp()
-
     @testtools.skip('It requires installed JS engine.')
     def test_javascript_action(self):
         wb_service.create_workbook_v2(WORKBOOK)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('test_js.js_test', {'num': 50})
+        wf_ex = self.engine.start_workflow('test_js.js_test', '', {'num': 50})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -91,7 +88,7 @@ class JavaScriptEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WORKBOOK)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('test_js.js_test', {'num': 50})
+        wf_ex = self.engine.start_workflow('test_js.js_test', '', {'num': 50})
 
         self.await_workflow_success(wf_ex.id)
 

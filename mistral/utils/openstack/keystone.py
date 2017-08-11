@@ -14,7 +14,9 @@
 # limitations under the License.
 
 import keystoneauth1.identity.generic as auth_plugins
+from keystoneauth1 import loading
 from keystoneauth1 import session as ks_session
+from keystoneauth1.token_endpoint import Token
 from keystoneclient import service_catalog as ks_service_catalog
 from keystoneclient.v3 import client as ks_client
 from keystoneclient.v3 import endpoints as ks_endpoints
@@ -26,11 +28,12 @@ from mistral import context
 from mistral import exceptions
 
 CONF = cfg.CONF
+CONF.register_opt(cfg.IntOpt('timeout'), group='keystone_authtoken')
 
 
 def client():
     ctx = context.ctx()
-    auth_url = ctx.auth_uri
+    auth_url = ctx.auth_uri or CONF.keystone_authtoken.auth_uri
 
     cl = ks_client.Client(
         user_id=ctx.user_id,
@@ -44,31 +47,102 @@ def client():
     return cl
 
 
-def _admin_client(trust_id=None, project_name=None):
-    auth_url = CONF.keystone_authtoken.auth_uri
+def _determine_verify(ctx):
+    if ctx.insecure:
+        return False
+    elif ctx.auth_cacert:
+        return ctx.auth_cacert
+    else:
+        return True
 
-    cl = ks_client.Client(
-        username=CONF.keystone_authtoken.admin_user,
-        password=CONF.keystone_authtoken.admin_password,
-        project_name=project_name,
-        auth_url=auth_url,
-        trust_id=trust_id
+
+def get_session_and_auth(context, **kwargs):
+    """Get session and auth parameters
+
+    :param context: action context
+    :return: dict to be used as kwargs for client serviceinitialization
+    """
+
+    if not context:
+        raise AssertionError('context is mandatory')
+
+    project_endpoint = get_endpoint_for_project(**kwargs)
+    endpoint = format_url(
+        project_endpoint.url,
+        {
+            'tenant_id': context.project_id,
+            'project_id': context.project_id
+        }
     )
 
-    cl.management_url = auth_url
+    auth = Token(endpoint=endpoint, token=context.auth_token)
 
-    return cl
+    auth_uri = context.auth_uri or CONF.keystone_authtoken.auth_uri
+    ks_auth = Token(
+        endpoint=auth_uri,
+        token=context.auth_token
+    )
+    session = ks_session.Session(
+        auth=ks_auth,
+        verify=_determine_verify(context)
+    )
+
+    return {
+        "session": session,
+        "auth": auth
+    }
 
 
-def client_for_admin(project_name):
-    return _admin_client(project_name=project_name)
+def _admin_client(trust_id=None):
+    if CONF.keystone_authtoken.auth_type is None:
+        auth_url = CONF.keystone_authtoken.auth_uri
+
+        cl = ks_client.Client(
+            username=CONF.keystone_authtoken.admin_user,
+            password=CONF.keystone_authtoken.admin_password,
+            project_name=CONF.keystone_authtoken.admin_tenant_name,
+            auth_url=auth_url,
+            trust_id=trust_id
+        )
+
+        cl.management_url = auth_url
+
+        return cl
+    else:
+        kwargs = {}
+
+        if trust_id:
+            # Remove project_name and project_id, since we need a trust scoped
+            # auth object
+            kwargs['project_name'] = None
+            kwargs['project_domain_name'] = None
+            kwargs['project_id'] = None
+            kwargs['trust_id'] = trust_id
+
+        auth = loading.load_auth_from_conf_options(
+            CONF,
+            'keystone_authtoken',
+            **kwargs
+        )
+        sess = loading.load_session_from_conf_options(
+            CONF,
+            'keystone_authtoken',
+            auth=auth
+        )
+
+        return ks_client.Client(session=sess)
+
+
+def client_for_admin():
+    return _admin_client()
 
 
 def client_for_trusts(trust_id):
     return _admin_client(trust_id=trust_id)
 
 
-def get_endpoint_for_project(service_name=None, service_type=None):
+def get_endpoint_for_project(service_name=None, service_type=None,
+                             region_name=None):
     if service_name is None and service_type is None:
         raise exceptions.MistralException(
             "Either 'service_name' or 'service_type' must be provided."
@@ -78,19 +152,32 @@ def get_endpoint_for_project(service_name=None, service_type=None):
 
     service_catalog = obtain_service_catalog(ctx)
 
+    # When region_name is not passed, first get from context as region_name
+    # could be passed to rest api in http header ('X-Region-Name'). Otherwise,
+    # just get region from mistral configuration.
+    region = (region_name or ctx.region_name)
+    if service_name == 'keystone':
+        # Determining keystone endpoint should be done using
+        # keystone_authtoken section as this option is special for keystone.
+        region = region or CONF.keystone_authtoken.region_name
+    else:
+        region = region or CONF.openstack_actions.default_region
+
     service_endpoints = service_catalog.get_endpoints(
         service_name=service_name,
         service_type=service_type,
-        region_name=ctx.region_name
+        region_name=region
     )
 
     endpoint = None
+    os_actions_endpoint_type = CONF.openstack_actions.os_actions_endpoint_type
+
     for endpoints in six.itervalues(service_endpoints):
         for ep in endpoints:
             # is V3 interface?
             if 'interface' in ep:
                 interface_type = ep['interface']
-                if CONF.os_actions_endpoint_type in interface_type:
+                if os_actions_endpoint_type in interface_type:
                     endpoint = ks_endpoints.Endpoint(
                         None,
                         ep,
@@ -114,7 +201,7 @@ def get_endpoint_for_project(service_name=None, service_type=None):
         raise exceptions.MistralException(
             "No endpoints found [service_name=%s, service_type=%s,"
             " region_name=%s]"
-            % (service_name, service_type, ctx.region_name)
+            % (service_name, service_type, region)
         )
     else:
         return endpoint
@@ -130,15 +217,17 @@ def obtain_service_catalog(ctx):
             )
 
         trust_client = client_for_trusts(ctx.trust_id)
-        response = trust_client.tokens.get_token_data(
+        token_data = trust_client.tokens.get_token_data(
             token,
             include_catalog=True
-        )['token']
+        )
+        response = token_data['token']
     else:
         response = ctx.service_catalog
 
         # Target service catalog may not be passed via API.
-        if not response and ctx.is_target:
+        # If we don't have the catalog yet, it should be requested.
+        if not response:
             response = client().tokens.get_token_data(
                 token,
                 include_catalog=True
@@ -168,28 +257,34 @@ def format_url(url_template, values):
 
 
 def is_token_trust_scoped(auth_token):
-    admin_project_name = CONF.keystone_authtoken.admin_tenant_name
-    keystone_client = _admin_client(project_name=admin_project_name)
-
-    token_info = keystone_client.tokens.validate(auth_token)
-
-    return 'OS-TRUST:trust' in token_info
+    return 'OS-TRUST:trust' in client_for_admin().tokens.validate(auth_token)
 
 
 def get_admin_session():
     """Returns a keystone session from Mistral's service credentials."""
+    if CONF.keystone_authtoken.auth_type is None:
+        auth = auth_plugins.Password(
+            CONF.keystone_authtoken.auth_uri,
+            username=CONF.keystone_authtoken.admin_user,
+            password=CONF.keystone_authtoken.admin_password,
+            project_name=CONF.keystone_authtoken.admin_tenant_name,
+            # NOTE(jaosorior): Once mistral supports keystone v3 properly, we
+            # can fetch the following values from the configuration.
+            user_domain_name='Default',
+            project_domain_name='Default')
 
-    auth = auth_plugins.Password(
-        CONF.keystone_authtoken.auth_uri,
-        username=CONF.keystone_authtoken.admin_user,
-        password=CONF.keystone_authtoken.admin_password,
-        project_name=CONF.keystone_authtoken.admin_tenant_name,
-        # NOTE(jaosorior): Once mistral supports keystone v3 properly, we can
-        # fetch the following values from the configuration.
-        user_domain_name='Default',
-        project_domain_name='Default')
+        return ks_session.Session(auth=auth)
+    else:
+        auth = loading.load_auth_from_conf_options(
+            CONF,
+            'keystone_authtoken'
+        )
 
-    return ks_session.Session(auth=auth)
+        return loading.load_session_from_conf_options(
+            CONF,
+            'keystone_authtoken',
+            auth=auth
+        )
 
 
 def will_expire_soon(expires_at):

@@ -25,8 +25,8 @@ from mistral.engine import action_queue
 from mistral.engine import tasks
 from mistral.engine import workflow_handler as wf_handler
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
 from mistral.services import scheduler
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import base as wf_base
 from mistral.workflow import commands as wf_cmds
 from mistral.workflow import states
@@ -42,6 +42,10 @@ _REFRESH_TASK_STATE_PATH = (
 
 _SCHEDULED_ON_ACTION_COMPLETE_PATH = (
     'mistral.engine.task_handler._scheduled_on_action_complete'
+)
+
+_SCHEDULED_ON_ACTION_UPDATE_PATH = (
+    'mistral.engine.task_handler._scheduled_on_action_update'
 )
 
 
@@ -62,7 +66,7 @@ def run_task(wf_cmd):
 
         msg = (
             "Failed to run task [error=%s, wf=%s, task=%s]:\n%s" %
-            (e, wf_ex, task_spec.get_name(), tb.format_exc())
+            (e, wf_ex.name, task_spec.get_name(), tb.format_exc())
         )
 
         LOG.error(msg)
@@ -116,6 +120,61 @@ def _on_action_complete(action_ex):
 
         wf_handler.force_fail_workflow(wf_ex, msg)
 
+
+@profiler.trace('task-handler-on-action-update', hide_args=True)
+def _on_action_update(action_ex):
+    """Handles action update event.
+
+    :param action_ex: Action execution.
+    """
+
+    task_ex = action_ex.task_execution
+
+    if not task_ex:
+        return
+
+    task_spec = spec_parser.get_task_spec(task_ex.spec)
+
+    wf_ex = task_ex.workflow_execution
+
+    task = _create_task(
+        wf_ex,
+        spec_parser.get_workflow_spec_by_execution_id(wf_ex.id),
+        task_spec,
+        task_ex.in_context,
+        task_ex
+    )
+
+    try:
+        task.on_action_update(action_ex)
+
+        if states.is_paused(action_ex.state):
+            wf_handler.pause_workflow(wf_ex)
+
+        if states.is_running(action_ex.state):
+            # If any subworkflow of the parent workflow is paused,
+            # then keep the parent workflow execution paused.
+            for task_ex in wf_ex.task_executions:
+                if states.is_paused(task_ex.state):
+                    return
+
+            # Otherwise if no other subworkflow is paused,
+            # then resume the parent workflow execution.
+            wf_handler.resume_workflow(wf_ex)
+
+    except exc.MistralException as e:
+        wf_ex = task_ex.workflow_execution
+
+        msg = ("Failed to handle action update [error=%s, wf=%s, task=%s,"
+               " action=%s]:\n%s" %
+               (e, wf_ex.name, task_ex.name, action_ex.name, tb.format_exc()))
+
+        LOG.error(msg)
+
+        task.set_state(states.ERROR, msg)
+
+        wf_handler.force_fail_workflow(wf_ex, msg)
+
         return
 
 
@@ -159,7 +218,7 @@ def continue_task(task_ex):
 
         msg = (
             "Failed to run task [error=%s, wf=%s, task=%s]:\n%s" %
-            (e, wf_ex, task_ex.name, tb.format_exc())
+            (e, wf_ex.name, task_ex.name, tb.format_exc())
         )
 
         LOG.error(msg)
@@ -185,7 +244,7 @@ def complete_task(task_ex, state, state_info):
 
         msg = (
             "Failed to complete task [error=%s, wf=%s, task=%s]:\n%s" %
-            (e, wf_ex, task_ex.name, tb.format_exc())
+            (e, wf_ex.name, task_ex.name, tb.format_exc())
         )
 
         LOG.error(msg)
@@ -217,7 +276,8 @@ def _build_task_from_command(cmd):
             cmd.ctx,
             task_ex=cmd.task_ex,
             unique_key=cmd.task_ex.unique_key,
-            waiting=cmd.task_ex.state == states.WAITING
+            waiting=cmd.task_ex.state == states.WAITING,
+            triggered_by=cmd.triggered_by
         )
 
         if cmd.reset:
@@ -232,7 +292,8 @@ def _build_task_from_command(cmd):
             cmd.task_spec,
             cmd.ctx,
             unique_key=cmd.unique_key,
-            waiting=cmd.is_waiting()
+            waiting=cmd.is_waiting(),
+            triggered_by=cmd.triggered_by
         )
 
         return task
@@ -241,13 +302,22 @@ def _build_task_from_command(cmd):
 
 
 def _create_task(wf_ex, wf_spec, task_spec, ctx, task_ex=None,
-                 unique_key=None, waiting=False):
+                 unique_key=None, waiting=False, triggered_by=None):
     if task_spec.get_with_items():
         cls = tasks.WithItemsTask
     else:
         cls = tasks.RegularTask
 
-    return cls(wf_ex, wf_spec, task_spec, ctx, task_ex, unique_key, waiting)
+    return cls(
+        wf_ex,
+        wf_spec,
+        task_spec,
+        ctx,
+        task_ex=task_ex,
+        unique_key=unique_key,
+        waiting=waiting,
+        triggered_by=triggered_by
+    )
 
 
 @action_queue.process
@@ -270,16 +340,20 @@ def _refresh_task_state(task_ex_id):
 
         wf_ctrl = wf_base.get_controller(wf_ex, wf_spec)
 
-        state, state_info, cardinality = wf_ctrl.get_logical_task_state(
+        log_state = wf_ctrl.get_logical_task_state(
             task_ex
         )
+
+        state = log_state.state
+        state_info = log_state.state_info
+
+        # Update 'triggered_by' because it could have changed.
+        task_ex.runtime_context['triggered_by'] = log_state.triggered_by
 
         if state == states.RUNNING:
             continue_task(task_ex)
         elif state == states.ERROR:
-            task = _build_task_from_execution(wf_spec, task_ex)
-
-            task.complete(state, state_info)
+            complete_task(task_ex, state, state_info)
         elif state == states.WAITING:
             # Let's assume that a task takes 0.01 sec in average to complete
             # and based on this assumption calculate a time of the next check.
@@ -290,14 +364,14 @@ def _refresh_task_state(task_ex_id):
             # then the next 'refresh_task_state' call will happen in 10
             # seconds. For 500 tasks it will be 50 seconds. The larger the
             # workflow is, the more beneficial this mechanism will be.
-            delay = int(cardinality * 0.01)
+            delay = int(log_state.cardinality * 0.01)
 
             _schedule_refresh_task_state(task_ex, max(1, delay))
         else:
             # Must never get here.
             raise RuntimeError(
-                'Unexpected logical task state [task_ex=%s, state=%s]' %
-                (task_ex, state)
+                'Unexpected logical task state [task_ex_id=%s, task_name=%s, '
+                'state=%s]' % (task_ex_id, task_ex.name, state)
             )
 
 
@@ -366,6 +440,51 @@ def schedule_on_action_complete(action_ex, delay=0):
     scheduler.schedule_call(
         None,
         _SCHEDULED_ON_ACTION_COMPLETE_PATH,
+        delay,
+        key=key,
+        action_ex_id=action_ex.id,
+        wf_action=isinstance(action_ex, models.WorkflowExecution)
+    )
+
+
+@action_queue.process
+def _scheduled_on_action_update(action_ex_id, wf_action):
+    with db_api.transaction():
+        if wf_action:
+            action_ex = db_api.get_workflow_execution(action_ex_id)
+        else:
+            action_ex = db_api.get_action_execution(action_ex_id)
+
+        _on_action_update(action_ex)
+
+
+def schedule_on_action_update(action_ex, delay=0):
+    """Schedules task update check.
+
+    This method provides transactional decoupling of action update from
+    task update check. It's needed in non-locking model in order to
+    avoid 'phantom read' phenomena when reading state of multiple actions
+    to see if a task is updated. Just starting a separate transaction
+    without using scheduler is not safe due to concurrency window that we'll
+    have in this case (time between transactions) whereas scheduler is a
+    special component that is designed to be resistant to failures.
+
+    :param action_ex: Action execution.
+    :param delay: Minimum amount of time before task update check
+        should be made.
+    """
+
+    # Optimization to avoid opening a new transaction if it's not needed.
+    if not action_ex.task_execution.spec.get('with-items'):
+        _on_action_update(action_ex)
+
+        return
+
+    key = 'th_on_a_c-%s' % action_ex.task_execution_id
+
+    scheduler.schedule_call(
+        None,
+        _SCHEDULED_ON_ACTION_UPDATE_PATH,
         delay,
         key=key,
         action_ex_id=action_ex.id,

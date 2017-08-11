@@ -14,15 +14,14 @@
 
 from oslo_config import cfg
 
-from mistral.actions import base as actions_base
+from mistral_lib import actions as actions_base
+
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
 from mistral.services import workflows as wf_service
 from mistral.tests.unit import base as test_base
 from mistral.tests.unit.engine import base
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
-
 
 # Use the set_default method to set value otherwise in certain test cases
 # the change in value is not permanent.
@@ -36,27 +35,42 @@ wf:
   input:
     - workflow_input: '__WORKFLOW_INPUT__'
     - action_output_length: 0
+    - action_output_dict: false
+    - action_error: false
 
   tasks:
     task1:
       action: my_action
       input:
-        action_input: '__ACTION_INPUT__'
-        action_output_length: <% $.action_output_length %>
+        input: '__ACTION_INPUT__'
+        output_length: <% $.action_output_length %>
+        output_dict: <% $.action_output_dict %>
+        error: <% $.action_error %>
       publish:
         p_var: '__TASK_PUBLISHED__'
 """
 
 
 class MyAction(actions_base.Action):
-    def __init__(self, action_input, action_output_length):
-        self.action_input = action_input
-        self.action_output_length = action_output_length
+    def __init__(self, input, output_length, output_dict=False, error=False):
+        self.input = input
+        self.output_length = output_length
+        self.output_dict = output_dict
+        self.error = error
 
-    def run(self):
-        return wf_utils.Result(
-            data=''.join('A' for _ in range(self.action_output_length))
-        )
+    def run(self, context):
+        if not self.output_dict:
+            result = ''.join('A' for _ in range(self.output_length))
+        else:
+            result = {}
+
+            for i in range(self.output_length):
+                result[i] = 'A'
+
+        if not self.error:
+            return actions_base.Result(data=result)
+        else:
+            return actions_base.Result(error=result)
 
     def test(self):
         raise NotImplementedError
@@ -109,7 +123,7 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
         wf_service.create_workflows(new_wf)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -123,12 +137,13 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
             exc.SizeLimitExceededException,
             self.engine.start_workflow,
             'wf',
+            '',
             {}
         )
 
         self.assertEqual(
             "Size of 'input' is 1KB which exceeds the limit of 0KB",
-            e.message
+            str(e)
         )
 
     def test_workflow_input_limit(self):
@@ -139,12 +154,13 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
             exc.SizeLimitExceededException,
             self.engine.start_workflow,
             'wf',
+            '',
             {'workflow_input': ''.join('A' for _ in range(1024))}
         )
 
         self.assertEqual(
             "Size of 'input' is 1KB which exceeds the limit of 0KB",
-            e.message
+            str(e)
         )
 
     def test_action_input_limit(self):
@@ -153,7 +169,7 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
         wf_service.create_workflows(new_wf)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.assertEqual(states.ERROR, wf_ex.state)
         self.assertIn(
@@ -167,6 +183,7 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wf',
+            '',
             {'action_output_length': 1024}
         )
 
@@ -187,7 +204,7 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
         wf_service.create_workflows(new_wf)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -220,6 +237,7 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
             exc.SizeLimitExceededException,
             self.engine.start_workflow,
             'wf',
+            '',
             {},
             '',
             env={'param': long_string}
@@ -227,5 +245,42 @@ class ExecutionFieldsSizeLimitTest(base.EngineTestCase):
 
         self.assertIn(
             "Size of 'params' is 1KB which exceeds the limit of 0KB",
-            e.message
+            str(e)
         )
+
+    def test_task_execution_state_info_trimmed(self):
+        # No limit on output, input and other JSON fields.
+        cfg.CONF.set_default(
+            'execution_field_size_limit_kb',
+            -1,
+            group='engine'
+        )
+
+        wf_service.create_workflows(WF)
+
+        # Start workflow.
+        wf_ex = self.engine.start_workflow(
+            'wf',
+            '',
+            {
+                'action_output_length': 80000,
+                'action_output_dict': True,
+                'action_error': True
+            }
+        )
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_ex = self._assert_single_item(
+                wf_ex.task_executions,
+                state=states.ERROR
+            )
+
+            # "state_info" must be trimmed so that it's not greater than 65535.
+            self.assertLess(len(task_ex.state_info), 65536)
+            self.assertGreater(len(task_ex.state_info), 65490)
+            self.assertLess(len(wf_ex.state_info), 65536)
+            self.assertGreater(len(wf_ex.state_info), 65490)

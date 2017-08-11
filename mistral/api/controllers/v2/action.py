@@ -28,10 +28,10 @@ from mistral.api.hooks import content_type as ct_hook
 from mistral import context
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
 from mistral.services import actions
 from mistral.utils import filter_utils
 from mistral.utils import rest_utils
-from mistral.workbook import parser as spec_parser
 
 LOG = logging.getLogger(__name__)
 
@@ -54,23 +54,30 @@ class ActionsController(rest.RestController, hooks.HookController):
         """
 
         acl.enforce('actions:get', context.ctx())
+
         LOG.info("Fetch action [identifier=%s]", identifier)
 
         db_model = db_api.get_action_definition(identifier)
 
-        return resources.Action.from_dict(db_model.to_dict())
+        return resources.Action.from_db_model(db_model)
 
     @rest_utils.wrap_pecan_controller_exception
     @pecan.expose(content_type="text/plain")
     def put(self, identifier=None):
         """Update one or more actions.
 
+        :param identifier: Optional. If provided, it's UUID or name of an
+            action. Only one action can be updated with identifier param.
+
         NOTE: This text is allowed to have definitions
             of multiple actions. In this case they all will be updated.
         """
         acl.enforce('actions:update', context.ctx())
+
         definition = pecan.request.text
+
         LOG.info("Update action(s) [definition=%s]", definition)
+
         scope = pecan.request.GET.get('scope', 'private')
 
         if scope not in resources.SCOPE_TYPES.values:
@@ -86,8 +93,9 @@ class ActionsController(rest.RestController, hooks.HookController):
                 identifier=identifier
             )
 
-        models_dicts = [db_act.to_dict() for db_act in db_acts]
-        action_list = [resources.Action.from_dict(act) for act in models_dicts]
+        action_list = [
+            resources.Action.from_db_model(db_act) for db_act in db_acts
+        ]
 
         return resources.Actions(actions=action_list).to_json()
 
@@ -100,6 +108,7 @@ class ActionsController(rest.RestController, hooks.HookController):
             of multiple actions. In this case they all will be created.
         """
         acl.enforce('actions:create', context.ctx())
+
         definition = pecan.request.text
         scope = pecan.request.GET.get('scope', 'private')
         pecan.response.status = 201
@@ -115,16 +124,21 @@ class ActionsController(rest.RestController, hooks.HookController):
         with db_api.transaction():
             db_acts = actions.create_actions(definition, scope=scope)
 
-        models_dicts = [db_act.to_dict() for db_act in db_acts]
-        action_list = [resources.Action.from_dict(act) for act in models_dicts]
+        action_list = [
+            resources.Action.from_db_model(db_act) for db_act in db_acts
+        ]
 
         return resources.Actions(actions=action_list).to_json()
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
     def delete(self, identifier):
-        """Delete the named action."""
+        """Delete the named action.
+
+        :param identifier: Name or UUID of the action to delete.
+        """
         acl.enforce('actions:delete', context.ctx())
+
         LOG.info("Delete action [identifier=%s]", identifier)
 
         with db_api.transaction():
@@ -175,9 +189,6 @@ class ActionsController(rest.RestController, hooks.HookController):
                            time and date.
         :param updated_at: Optional. Keep only resources with specific latest
                            update time and date.
-
-        Where project_id is the same as the requester or
-        project_id is different but the scope is public.
         """
         acl.enforce('actions:list', context.ctx())
 

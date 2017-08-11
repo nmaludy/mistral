@@ -28,12 +28,14 @@ import sqlalchemy as sa
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import Insert
 
-from mistral import context as auth_ctx
+from mistral import context
 from mistral.db.sqlalchemy import base as b
 from mistral.db.sqlalchemy import model_base as mb
 from mistral.db.sqlalchemy import sqlite_lock
+from mistral.db import utils as m_dbutils
 from mistral.db.v2.sqlalchemy import filters as db_filters
 from mistral.db.v2.sqlalchemy import models
+from mistral.db.v2.sqlalchemy.models import WorkflowExecution
 from mistral import exceptions as exc
 from mistral.services import security
 from mistral import utils
@@ -52,7 +54,7 @@ def get_backend():
     """Consumed by openstack common code.
 
     The backend is this module itself.
-    :return Name of db backend.
+    :return: Name of db backend.
     """
     return sys.modules[__name__]
 
@@ -251,20 +253,67 @@ def _get_collection_sorted_by_time(model, insecure=False, fields=None,
     )
 
 
-def _get_db_object_by_name(model, name):
-    return _secure_query(model).filter_by(name=name).first()
+def _get_db_object_by_name(model, name, filter_=None, order_by=None):
+
+    query = _secure_query(model)
+    final_filter = model.name == name
+
+    if filter_ is not None:
+        final_filter = sa.and_(final_filter, filter_)
+
+    if order_by is not None:
+        query = query.order_by(order_by)
+
+    return query.filter(final_filter).first()
 
 
-def _get_db_object_by_id(model, id):
-    return _secure_query(model).filter_by(id=id).first()
+def _get_wf_object_by_name_and_namespace(model, name, namespace=None):
+
+    query = _secure_query(model)
+    filter_ = model.name == name
+
+    if namespace is not None:
+        in_namespace = sa.or_(
+            model.namespace == namespace,
+            model.namespace == ''
+        )
+        filter_ = sa.and_(filter_, in_namespace)
+
+        # Give priority to objects not in the default namespace.
+        query = query.order_by(model.namespace.desc())
+
+    return query.filter(filter_).first()
+
+
+def _get_db_object_by_id(model, id, insecure=False):
+    query = b.model_query(model) if insecure else _secure_query(model)
+
+    return query.filter_by(id=id).first()
 
 
 def _get_db_object_by_name_or_id(model, identifier, insecure=False):
+    return _get_db_object_by_name_and_namespace_or_id(
+        model,
+        identifier,
+        insecure=insecure
+    )
+
+
+def _get_db_object_by_name_and_namespace_or_id(model, identifier,
+                                               namespace=None, insecure=False):
+
     query = b.model_query(model) if insecure else _secure_query(model)
+
+    match_name = model.name == identifier
+
+    if namespace is not None:
+        match_name = sa.and_(match_name, model.namespace == namespace)
+
+    match_id = model.id == identifier
     query = query.filter(
         sa.or_(
-            model.id == identifier,
-            model.name == identifier
+            match_id,
+            match_name
         )
     )
 
@@ -417,24 +466,27 @@ def delete_workbooks(session=None, **kwargs):
 # Workflow definitions.
 
 @b.session_aware()
-def get_workflow_definition(identifier, session=None, insecure=False):
+def get_workflow_definition(identifier, namespace='', session=None):
     """Gets workflow definition by name or uuid.
 
     :param identifier: Identifier could be in the format of plain string or
                        uuid.
-    :param insecure: If True, will search all records, otherwise will narrow
-        scope to project id.
+    :param namespace: The namespace the workflow is in. Optional.
     :return: Workflow definition.
     """
-    wf_def = _get_db_object_by_name_or_id(
+    ctx = context.ctx()
+
+    wf_def = _get_db_object_by_name_and_namespace_or_id(
         models.WorkflowDefinition,
         identifier,
-        insecure=insecure
+        namespace=namespace,
+        insecure=ctx.is_admin
     )
 
     if not wf_def:
         raise exc.DBEntityNotFoundError(
-            "Workflow not found [workflow_identifier=%s]" % identifier
+            "Workflow not found [workflow_identifier=%s, namespace=%s]"
+            % (identifier, namespace)
         )
 
     return wf_def
@@ -453,8 +505,23 @@ def get_workflow_definition_by_id(id, session=None):
 
 
 @b.session_aware()
-def load_workflow_definition(name, session=None):
-    return _get_db_object_by_name(models.WorkflowDefinition, name)
+def load_workflow_definition(name, namespace='', session=None):
+    model = models.WorkflowDefinition
+
+    filter_ = sa.or_(
+        model.namespace == namespace,
+        model.namespace == ''
+    )
+
+    # Give priority to objects not in the default namespace.
+    order_by = model.namespace.desc()
+
+    return _get_db_object_by_name(
+        model,
+        name,
+        filter_,
+        order_by
+    )
 
 
 @b.session_aware()
@@ -489,20 +556,10 @@ def create_workflow_definition(values, session=None):
 
 
 @b.session_aware()
-def update_workflow_definition(identifier, values, session=None):
-    wf_def = get_workflow_definition(identifier, insecure=True)
-    ctx = auth_ctx.ctx()
+def update_workflow_definition(identifier, values, namespace='', session=None):
+    wf_def = get_workflow_definition(identifier, namespace=namespace)
 
-    if not ctx.is_admin and wf_def.project_id != security.get_project_id():
-        raise exc.NotAllowedException(
-            "Can not update workflow of other tenants. "
-            "[workflow_identifier=%s]" % identifier
-        )
-
-    if not ctx.is_admin and wf_def.is_system:
-        raise exc.InvalidActionException(
-            "Attempt to modify a system workflow: %s" % identifier
-        )
+    m_dbutils.check_db_obj_access(wf_def)
 
     if wf_def.scope == 'public' and values['scope'] == 'private':
         # Check cron triggers.
@@ -543,18 +600,10 @@ def create_or_update_workflow_definition(name, values, session=None):
 
 
 @b.session_aware()
-def delete_workflow_definition(identifier, session=None):
-    wf_def = get_workflow_definition(identifier)
+def delete_workflow_definition(identifier, namespace='', session=None):
+    wf_def = get_workflow_definition(identifier, namespace)
 
-    if wf_def.project_id != security.get_project_id():
-        raise exc.NotAllowedException(
-            "Can not delete workflow of other users. [workflow_identifier=%s]"
-            % identifier
-        )
-
-    if wf_def.is_system:
-        msg = "Attempt to delete a system workflow: %s" % identifier
-        raise exc.DataAccessException(msg)
+    m_dbutils.check_db_obj_access(wf_def)
 
     cron_triggers = get_cron_triggers(insecure=True, workflow_id=wf_def.id)
     if cron_triggers:
@@ -753,7 +802,13 @@ def _get_action_executions(**kwargs):
 
 @b.session_aware()
 def get_workflow_execution(id, session=None):
-    wf_ex = _get_db_object_by_id(models.WorkflowExecution, id)
+    ctx = context.ctx()
+
+    wf_ex = _get_db_object_by_id(
+        models.WorkflowExecution,
+        id,
+        insecure=ctx.is_admin
+    )
 
     if not wf_ex:
         raise exc.DBEntityNotFoundError(
@@ -800,6 +855,8 @@ def create_workflow_execution(values, session=None):
 @b.session_aware()
 def update_workflow_execution(id, values, session=None):
     wf_ex = get_workflow_execution(id)
+
+    m_dbutils.check_db_obj_access(wf_ex)
 
     wf_ex.update(values.copy())
 
@@ -883,7 +940,8 @@ def _get_incomplete_task_executions_query(kwargs):
             models.TaskExecution.state == states.IDLE,
             models.TaskExecution.state == states.RUNNING,
             models.TaskExecution.state == states.WAITING,
-            models.TaskExecution.state == states.RUNNING_DELAYED
+            models.TaskExecution.state == states.RUNNING_DELAYED,
+            models.TaskExecution.state == states.PAUSED
         )
     )
 
@@ -1041,13 +1099,37 @@ def delete_delayed_calls(session=None, **kwargs):
 
 
 @b.session_aware()
-def get_expired_executions(time, session=None):
-    query = b.model_query(models.WorkflowExecution)
+def get_executions_to_clean(expiration_time, limit=None,
+                            max_finished_executions=None, columns=(),
+                            session=None):
+    # Get the ids of the executions that won't be deleted.
+    # These are the not expired executions,
+    # limited by the new max_finished_executions constraint.
+    query = _get_completed_root_executions_query((WorkflowExecution.id,))
+    query = query.filter(
+        models.WorkflowExecution.updated_at >= expiration_time
+    )
+    query = query.order_by(models.WorkflowExecution.updated_at.desc())
 
+    if max_finished_executions:
+        query = query.limit(max_finished_executions)
+
+    # And take the inverse of that set.
+    inverse = _get_completed_root_executions_query(columns)
+    inverse = inverse.filter(~WorkflowExecution.id.in_(query))
+    inverse = inverse.order_by(models.WorkflowExecution.updated_at.asc())
+
+    if limit:
+        inverse.limit(limit)
+
+    return inverse.all()
+
+
+def _get_completed_root_executions_query(columns):
+    query = b.model_query(models.WorkflowExecution, columns=columns)
     # Only WorkflowExecution that are not a child of other WorkflowExecution.
     query = query.filter(models.WorkflowExecution.
                          task_execution_id == sa.null())
-    query = query.filter(models.WorkflowExecution.updated_at < time)
     query = query.filter(
         sa.or_(
             models.WorkflowExecution.state == states.SUCCESS,
@@ -1055,11 +1137,8 @@ def get_expired_executions(time, session=None):
             models.WorkflowExecution.state == states.CANCELLED
         )
     )
+    return query
 
-    return query.all()
-
-
-# Cron triggers.
 
 @b.session_aware()
 def get_cron_trigger(name, session=None):
@@ -1425,6 +1504,11 @@ def get_event_trigger(id, insecure=False, session=None):
         )
 
     return event_trigger
+
+
+@b.session_aware()
+def load_event_trigger(id, insecure=False, session=None):
+    return _get_event_trigger(id, insecure)
 
 
 @b.session_aware()

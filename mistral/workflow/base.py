@@ -21,8 +21,8 @@ from oslo_log import log as logging
 from osprofiler import profiler
 
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
 from mistral import utils as u
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import commands
 from mistral.workflow import data_flow
 from mistral.workflow import lookup_utils
@@ -32,7 +32,7 @@ from mistral.workflow import states
 LOG = logging.getLogger(__name__)
 
 
-@profiler.trace('wf-controller-get-controller')
+@profiler.trace('wf-controller-get-controller', hide_args=True)
 def get_controller(wf_ex, wf_spec=None):
     """Gets a workflow controller instance by given workflow execution object.
 
@@ -62,6 +62,33 @@ def get_controller(wf_ex, wf_spec=None):
     return ctrl_cls(wf_ex, wf_spec)
 
 
+class TaskLogicalState(object):
+    """Task logical state.
+
+    This data structure describes what state a task should have according
+    to the logic of the workflow type and state of other tasks.
+    """
+
+    def __init__(self, state, state_info=None, cardinality=0,
+                 triggered_by=None):
+        self.state = state
+        self.state_info = state_info
+        self.cardinality = cardinality
+        self.triggered_by = triggered_by or []
+
+    def get_state(self):
+        return self.state
+
+    def get_state_info(self):
+        return self.state_info
+
+    def get_cardinality(self):
+        return self.cardinality
+
+    def get_triggered_by(self):
+        return self.get_triggered_by
+
+
 class WorkflowController(object):
     """Workflow Controller base class.
 
@@ -85,7 +112,7 @@ class WorkflowController(object):
 
         self.wf_spec = wf_spec
 
-    @profiler.trace('workflow-controller-continue-workflow')
+    @profiler.trace('workflow-controller-continue-workflow', hide_args=True)
     def continue_workflow(self, task_ex=None):
         """Calculates a list of commands to continue the workflow.
 
@@ -121,7 +148,7 @@ class WorkflowController(object):
             for t_e in task_execs
         ]
 
-        LOG.debug("Commands to rerun workflow tasks: %s" % cmds)
+        LOG.debug("Commands to rerun workflow tasks: %s", cmds)
 
         return cmds
 

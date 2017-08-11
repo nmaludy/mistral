@@ -24,34 +24,31 @@ User guide
 **Installation**
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
-   guides/installation_guide
-   guides/configuration_guide
-   guides/dashboard_guide
-   guides/upgrade_guide
-   guides/mistralclient_guide
+   install/index
+   configuration/index
 
 **API**
 
 .. toctree::
    :maxdepth: 2
 
-   developer/webapi/index
+   api/index
 
-**DSL**
+**Mistral Workflow Language**
 
 .. toctree::
    :maxdepth: 2
 
-   dsl/index
+   user/dsl_v2
 
 **CLI**
 
 .. toctree::
    :maxdepth: 1
 
-   guides/cli_guide
+   cli/index
 
 Developer guide
 ---------------
@@ -59,12 +56,18 @@ Developer guide
 .. toctree::
    :maxdepth: 2
 
-   developer/index
+   contributor/index
+
+Admin guide
+-----------
+
+.. toctree::
+   :maxdepth: 2
+
+   admin/index
 
 Indices and tables
 ==================
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`
-

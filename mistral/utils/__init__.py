@@ -15,6 +15,7 @@
 #    limitations under the License.
 
 import contextlib
+import datetime
 import functools
 import json
 import logging
@@ -185,6 +186,27 @@ def get_file_list(directory):
 
 
 def cut_dict(d, length=100):
+    """Removes dictionary entries according to the given length.
+
+    This method removes a number of entries, if needed, so that a
+    string representation would fit into the given length.
+    The intention of this method is to optimize truncation of string
+    representation for dictionaries where the exact precision is not
+    critically important. Otherwise, we'd always have to convert a dict
+    into a string first and then shrink it to a needed size which will
+    increase memory footprint and reduce performance in case of large
+    dictionaries (i.e. tens of thousands entries).
+    Note that the method, due to complexity of the algorithm, has some
+    non-zero precision which depends on exact keys and values placed into
+    the dict. So for some dicts their reduced string representations will
+    be only approximately equal to the given value (up to around several
+    chars difference).
+
+    :param d: A dictionary.
+    :param length: A length limiting the dictionary string representation.
+    :return: A dictionary which is a subset of the given dictionary.
+    """
+
     if not isinstance(d, dict):
         raise ValueError("A dictionary is expected, got: %s" % type(d))
 
@@ -332,54 +354,61 @@ def random_sleep(limit=1):
 
 
 class NotDefined(object):
-    """This class is just a marker of input params without value."""
+    """Marker of an empty value.
+
+    In a number of cases None can't be used to express the semantics of
+    a not defined value because None is just a normal value rather than
+    a value set to denote that it's not defined. This class can be used
+    in such cases instead of None.
+    """
 
     pass
 
 
-def get_dict_from_string(input_string, delimiter=','):
-    if not input_string:
+def get_dict_from_string(string, delimiter=','):
+    if not string:
         return {}
 
-    raw_inputs = input_string.split(delimiter)
+    kv_dicts = []
 
-    inputs = []
+    for kv_pair_str in string.split(delimiter):
+        kv_str = kv_pair_str.strip()
+        kv_list = kv_str.split('=')
 
-    for raw in raw_inputs:
-        input = raw.strip()
-        name_value = input.split('=')
-
-        if len(name_value) > 1:
-
+        if len(kv_list) > 1:
             try:
-                value = json.loads(name_value[1])
+                value = json.loads(kv_list[1])
             except ValueError:
-                value = name_value[1]
+                value = kv_list[1]
 
-            inputs += [{name_value[0]: value}]
+            kv_dicts += [{kv_list[0]: value}]
         else:
-            inputs += [name_value[0]]
+            kv_dicts += [kv_list[0]]
 
-    return get_input_dict(inputs)
+    return get_dict_from_entries(kv_dicts)
 
 
-def get_input_dict(inputs):
-    """Transform input list to dictionary.
+def get_dict_from_entries(entries):
+    """Transforms a list of entries into dictionary.
 
-    Ensure every input param has a default value(it will be a NotDefined
-    object if it's not provided).
+    :param entries: A list of entries.
+        If an entry is a dictionary the method simply updates the result
+        dictionary with its content.
+        If an entry is not a dict adds {entry, NotDefined} into the result.
     """
-    input_dict = {}
-    for x in inputs:
-        if isinstance(x, dict):
-            input_dict.update(x)
-        else:
-            # NOTE(xylan): we put a NotDefined class here as the value of
-            # param without value specified, to distinguish from the valid
-            # values such as None, ''(empty string), etc.
-            input_dict[x] = NotDefined
 
-    return input_dict
+    result = {}
+
+    for e in entries:
+        if isinstance(e, dict):
+            result.update(e)
+        else:
+            # NOTE(kong): we put NotDefined here as the value of
+            # param without value specified, to distinguish from
+            # the valid values such as None, ''(empty string), etc.
+            result[e] = NotDefined
+
+    return result
 
 
 def get_process_identifier():
@@ -460,5 +489,33 @@ def generate_key_pair(key_length=2048):
 def utc_now_sec():
     """Returns current time and drops microseconds."""
 
-    d = timeutils.utcnow()
-    return d.replace(microsecond=0)
+    return timeutils.utcnow().replace(microsecond=0)
+
+
+def datetime_to_str(val, sep=' '):
+    """Converts datetime value to string.
+
+    If the given value is not an instance of datetime then the method
+    returns the same value.
+
+    :param val: datetime value.
+    :param sep: Separator between date and time.
+    :return: Datetime as a string.
+    """
+    if isinstance(val, datetime.datetime):
+        return val.isoformat(sep)
+
+    return val
+
+
+def datetime_to_str_in_dict(d, key, sep=' '):
+    """Converts datetime value in te given dict to string.
+
+    :param d: A dictionary.
+    :param key: The key for which we need to convert the value.
+    :param sep: Separator between date and time.
+    """
+    val = d.get(key)
+
+    if val is not None:
+        d[key] = datetime_to_str(d[key], sep=sep)

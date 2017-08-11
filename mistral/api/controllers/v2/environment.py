@@ -102,14 +102,17 @@ class EnvironmentController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.Environment, wtypes.text)
     def get(self, name):
-        """Return the named environment."""
+        """Return the named environment.
+
+        :param name: Name of environment to retrieve
+        """
         acl.enforce('environments:get', context.ctx())
 
-        LOG.info("Fetch environment [name=%s]" % name)
+        LOG.info("Fetch environment [name=%s]", name)
 
         db_model = db_api.get_environment(name)
 
-        return resources.Environment.from_dict(db_model.to_dict())
+        return resources.Environment.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(
@@ -118,10 +121,13 @@ class EnvironmentController(rest.RestController):
         status_code=201
     )
     def post(self, env):
-        """Create a new environment."""
+        """Create a new environment.
+
+        :param env: Required. Environment structure to create
+        """
         acl.enforce('environments:create', context.ctx())
 
-        LOG.info("Create environment [env=%s]" % env)
+        LOG.info("Create environment [env=%s]", env)
 
         self._validate_environment(
             json.loads(wsme_pecan.pecan.request.body.decode()),
@@ -130,12 +136,15 @@ class EnvironmentController(rest.RestController):
 
         db_model = db_api.create_environment(env.to_dict())
 
-        return resources.Environment.from_dict(db_model.to_dict())
+        return resources.Environment.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.Environment, body=resources.Environment)
     def put(self, env):
-        """Update an environment."""
+        """Update an environment.
+
+        :param env: Required. Environment structure to update
+        """
         acl.enforce('environments:update', context.ctx())
 
         if not env.name:
@@ -143,7 +152,7 @@ class EnvironmentController(rest.RestController):
                 'Name of the environment is not provided.'
             )
 
-        LOG.info("Update environment [name=%s, env=%s]" % (env.name, env))
+        LOG.info("Update environment [name=%s, env=%s]", env.name, env)
 
         definition = json.loads(wsme_pecan.pecan.request.body.decode())
         definition.pop('name')
@@ -155,15 +164,18 @@ class EnvironmentController(rest.RestController):
 
         db_model = db_api.update_environment(env.name, env.to_dict())
 
-        return resources.Environment.from_dict(db_model.to_dict())
+        return resources.Environment.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
     def delete(self, name):
-        """Delete the named environment."""
+        """Delete the named environment.
+
+        :param name: Name of environment to delete
+        """
         acl.enforce('environments:delete', context.ctx())
 
-        LOG.info("Delete environment [name=%s]" % name)
+        LOG.info("Delete environment [name=%s]", name)
 
         db_api.delete_environment(name)
 

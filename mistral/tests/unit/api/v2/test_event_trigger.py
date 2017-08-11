@@ -19,7 +19,9 @@ import mock
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
 from mistral import exceptions as exc
+from mistral.services import triggers
 from mistral.tests.unit.api import base
+from mistral.tests.unit import base as unit_base
 
 WF = models.WorkflowDefinition(
     spec={
@@ -85,7 +87,7 @@ class TestEventTriggerController(base.APITest):
     @mock.patch.object(db_api, "get_workflow_definition", MOCK_WF)
     @mock.patch.object(db_api, "create_event_trigger", MOCK_TRIGGER)
     @mock.patch.object(db_api, "get_event_triggers", MOCK_TRIGGERS)
-    @mock.patch('mistral.engine.rpc_backend.rpc.get_event_engine_client')
+    @mock.patch('mistral.rpc.clients.get_event_engine_client')
     def test_post(self, mock_rpc_client):
         client = mock.Mock()
         mock_rpc_client.return_value = client
@@ -98,14 +100,32 @@ class TestEventTriggerController(base.APITest):
         self.assertEqual(201, resp.status_int)
         self.assertEqual(1, client.create_event_trigger.call_count)
 
+        trigger_db = TRIGGER_DB.to_dict()
+        trigger_db['workflow_namespace'] = None
+
         self.assertDictEqual(
-            TRIGGER_DB.to_dict(),
+            trigger_db,
             client.create_event_trigger.call_args[0][0]
         )
         self.assertListEqual(
             ['compute.instance.create.start'],
             client.create_event_trigger.call_args[0][1]
         )
+
+    @mock.patch.object(db_api, "get_workflow_definition_by_id", MOCK_WF)
+    @mock.patch.object(db_api, "get_workflow_definition", MOCK_WF)
+    @mock.patch.object(triggers, "create_event_trigger")
+    def test_post_public(self, create_trigger):
+        trigger = copy.deepcopy(TRIGGER)
+        trigger['scope'] = 'public'
+        trigger.pop('id')
+
+        resp = self.app.post_json('/v2/event_triggers', trigger)
+
+        self.assertEqual(201, resp.status_int)
+
+        self.assertTrue(create_trigger.called)
+        self.assertEqual('public', create_trigger.call_args[0][5])
 
     def test_post_no_workflow_id(self):
         CREATE_TRIGGER = copy.deepcopy(TRIGGER)
@@ -134,7 +154,7 @@ class TestEventTriggerController(base.APITest):
         self.assertEqual(404, resp.status_int)
 
     @mock.patch.object(db_api, 'ensure_event_trigger_exists', MOCK_NONE)
-    @mock.patch('mistral.engine.rpc_backend.rpc.get_event_engine_client')
+    @mock.patch('mistral.rpc.clients.get_event_engine_client')
     @mock.patch('mistral.db.v2.api.update_event_trigger')
     def test_put(self, mock_update, mock_rpc_client):
         client = mock.Mock()
@@ -167,7 +187,7 @@ class TestEventTriggerController(base.APITest):
 
         self.assertEqual(400, resp.status_int)
 
-    @mock.patch('mistral.engine.rpc_backend.rpc.get_event_engine_client')
+    @mock.patch('mistral.rpc.clients.get_event_engine_client')
     @mock.patch.object(db_api, "get_event_trigger", MOCK_TRIGGER)
     @mock.patch.object(db_api, "get_event_triggers",
                        mock.MagicMock(return_value=[]))
@@ -209,3 +229,15 @@ class TestEventTriggerController(base.APITest):
 
         self.assertEqual(1, len(resp.json['event_triggers']))
         self.assertDictEqual(TRIGGER, resp.json['event_triggers'][0])
+
+    @mock.patch('mistral.db.v2.api.get_event_triggers')
+    @mock.patch('mistral.context.MistralContext.from_environ')
+    def test_get_all_projects_admin(self, mock_context, mock_get_wf_defs):
+        admin_ctx = unit_base.get_context(admin=True)
+        mock_context.return_value = admin_ctx
+
+        resp = self.app.get('/v2/event_triggers?all_projects=true')
+
+        self.assertEqual(200, resp.status_int)
+
+        self.assertTrue(mock_get_wf_defs.call_args[1].get('insecure', False))

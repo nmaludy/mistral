@@ -35,13 +35,17 @@ from mistral.workflow import states
 
 class DefaultEngine(base.Engine):
     @action_queue.process
-    @profiler.trace('engine-start-workflow')
-    def start_workflow(self, wf_identifier, wf_input, description='',
-                       **params):
+    @profiler.trace('engine-start-workflow', hide_args=True)
+    def start_workflow(self, wf_identifier, wf_namespace='', wf_input=None,
+                       description='', **params):
+        if wf_namespace:
+            params['namespace'] = wf_namespace
+
         with db_api.transaction():
             wf_ex = wf_handler.start_workflow(
                 wf_identifier,
-                wf_input,
+                wf_namespace,
+                wf_input or {},
                 description,
                 params
             )
@@ -111,6 +115,21 @@ class DefaultEngine(base.Engine):
                 action_ex = db_api.get_action_execution(action_ex_id)
 
             action_handler.on_action_complete(action_ex, result)
+
+            return action_ex.get_clone()
+
+    @db_utils.retry_on_deadlock
+    @action_queue.process
+    @profiler.trace('engine-on-action-update', hide_args=True)
+    def on_action_update(self, action_ex_id, state, wf_action=False,
+                         async_=False):
+        with db_api.transaction():
+            if wf_action:
+                action_ex = db_api.get_workflow_execution(action_ex_id)
+            else:
+                action_ex = db_api.get_action_execution(action_ex_id)
+
+            action_handler.on_action_update(action_ex, state)
 
             return action_ex.get_clone()
 

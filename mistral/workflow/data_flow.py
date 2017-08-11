@@ -22,9 +22,9 @@ from mistral import context as auth_ctx
 from mistral.db.v2.sqlalchemy import models
 from mistral import exceptions as exc
 from mistral import expressions as expr
+from mistral.lang import parser as spec_parser
 from mistral import utils
 from mistral.utils import inspect_utils
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import states
 
 LOG = logging.getLogger(__name__)
@@ -190,25 +190,38 @@ def publish_variables(task_ex, task_spec):
 
     wf_ex = task_ex.workflow_execution
 
-    expr_ctx = ContextView(
-        task_ex.in_context,
-        wf_ex.context,
-        wf_ex.input
-    )
+    expr_ctx = ContextView(task_ex.in_context, wf_ex.context, wf_ex.input)
 
     if task_ex.name in expr_ctx:
         LOG.warning(
-            'Shadowing context variable with task name while publishing: %s' %
+            'Shadowing context variable with task name while '
+            'publishing: %s',
             task_ex.name
         )
 
-    data = (
-        task_spec.get_publish()
-        if task_ex.state == states.SUCCESS
-        else task_spec.get_publish_on_error()
+    publish_spec = task_spec.get_publish(task_ex.state)
+
+    if not publish_spec:
+        return
+
+    # Publish branch variables.
+    branch_vars = publish_spec.get_branch()
+
+    task_ex.published = expr.evaluate_recursively(branch_vars, expr_ctx)
+
+    # Publish global variables.
+    global_vars = publish_spec.get_global()
+
+    utils.merge_dicts(
+        task_ex.workflow_execution.context,
+        expr.evaluate_recursively(global_vars, expr_ctx)
     )
 
-    task_ex.published = expr.evaluate_recursively(data, expr_ctx)
+    # TODO(rakhmerov):
+    # 1. Publish atomic variables.
+    # 2. Add the field "publish" in TaskExecution model similar to "published"
+    #    but containing info as
+    #    {'branch': {vars}, 'global': {vars}, 'atomic': {vars}}
 
 
 def evaluate_task_outbound_context(task_ex):
@@ -223,8 +236,6 @@ def evaluate_task_outbound_context(task_ex):
         copy.deepcopy(dict(task_ex.in_context))
         if task_ex.in_context is not None else {}
     )
-
-    remove_current_task_from_context(in_context)
 
     return utils.update_dict(in_context, task_ex.published)
 
@@ -256,7 +267,7 @@ def add_current_task_to_context(ctx, task_id, task_name):
     return ctx
 
 
-def remove_current_task_from_context(ctx):
+def remove_internal_data_from_context(ctx):
     if '__task_execution' in ctx:
         del ctx['__task_execution']
 
@@ -266,8 +277,6 @@ def add_openstack_data_to_context(wf_ex):
 
     if CONF.pecan.auth_enable:
         exec_ctx = auth_ctx.ctx()
-
-        LOG.debug('Data flow security context: %s' % exec_ctx)
 
         if exec_ctx:
             wf_ex.context.update({'openstack': exec_ctx.to_dict()})
@@ -289,8 +298,14 @@ def add_environment_to_context(wf_ex):
     if 'env' in wf_ex.params:
         env = copy.deepcopy(wf_ex.params['env'])
 
-        # An env variable can be an expression of other env variables.
-        wf_ex.context['__env'] = expr.evaluate_recursively(env, {'__env': env})
+        if ('evaluate_env' in wf_ex.params and
+                not wf_ex.params['evaluate_env']):
+            wf_ex.context['__env'] = env
+        else:
+            wf_ex.context['__env'] = expr.evaluate_recursively(
+                env,
+                {'__env': env}
+            )
 
 
 def add_workflow_variables_to_context(wf_ex, wf_spec):

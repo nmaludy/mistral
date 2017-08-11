@@ -22,7 +22,6 @@ from paramiko import ssh_exception
 from tempest import config
 from tempest.lib import decorators
 from tempest.lib import exceptions
-from tempest import test
 
 from mistral import utils
 from mistral.utils import ssh_utils
@@ -101,7 +100,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
     def _wait_until_server_up(cls, server_ip, timeout=120, delay=2):
         seconds_remain = timeout
 
-        LOG.info("Waiting server SSH [IP=%s]..." % server_ip)
+        LOG.info("Waiting server SSH [IP=%s]...", server_ip)
 
         while seconds_remain > 0:
             try:
@@ -124,7 +123,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
     def _wait_until_server_active(cls, server_id, timeout=60, delay=2):
         seconds_remain = timeout
 
-        LOG.info("Waiting server [id=%s]..." % server_id)
+        LOG.info("Waiting server [id=%s]...", server_id)
 
         while seconds_remain > 0:
             server_info = cls.mgr.servers_client.show_server(server_id)
@@ -142,7 +141,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
     def _wait_until_server_delete(cls, server_id, timeout=60, delay=2):
         seconds_remain = timeout
 
-        LOG.info("Deleting server [id=%s]..." % server_id)
+        LOG.info("Deleting server [id=%s]...", server_id)
 
         while seconds_remain > 0:
             try:
@@ -182,9 +181,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
             overwrite=True
         )
 
-        LOG.info(
-            "Private key saved to %s" % cls.key_dir + cls.key_name
-        )
+        LOG.info("Private key saved to %s", cls.key_dir + cls.key_name)
 
         # Create keypair in nova.
         cls.mgr.keypairs_client.create_keypair(
@@ -246,7 +243,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
 
         super(SSHActionsTestsV2, cls).resource_cleanup()
 
-    @test.attr(type='sanity')
+    @decorators.attr(type='sanity')
     @decorators.idempotent_id('3e12a2ad-5b10-46b0-ae1f-ed34d3cc6ae2')
     def test_run_ssh_action(self):
         input_data = {
@@ -269,7 +266,7 @@ class SSHActionsTestsV2(base.TestCaseAdvanced):
 
         self.assertIn(self.public_vm['name'], output['result'])
 
-    @test.attr(type='sanity')
+    @decorators.attr(type='sanity')
     @decorators.idempotent_id('6c09fb04-70b4-43a6-b5f8-a53ca92e66e0')
     def test_run_ssh_proxied_action(self):
         guest_vm_ip = self.guest_vm['addresses'].popitem()[1][0]['addr']

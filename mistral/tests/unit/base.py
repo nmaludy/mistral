@@ -25,16 +25,17 @@ from oslo_log import log as logging
 from oslotest import base
 import testtools.matchers as ttm
 
+from mistral import config
 from mistral import context as auth_context
 from mistral.db.sqlalchemy import base as db_sa_base
 from mistral.db.sqlalchemy import sqlite_lock
 from mistral.db.v2 import api as db_api
+from mistral.lang import parser as spec_parser
 from mistral.services import action_manager
 from mistral.services import security
 from mistral.tests.unit import config as test_config
 from mistral.utils import inspect_utils as i_utils
 from mistral import version
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import lookup_utils
 
 RESOURCES_PATH = 'tests/resources/'
@@ -52,21 +53,21 @@ def get_resource(resource_name):
 
 def get_context(default=True, admin=False):
     if default:
-        return auth_context.MistralContext(
-            user_id='1-2-3-4',
-            project_id=security.DEFAULT_PROJECT_ID,
-            user_name='test-user',
-            project_name='test-project',
-            is_admin=admin
-        )
+        return auth_context.MistralContext.from_dict({
+            'user_name': 'test-user',
+            'user': '1-2-3-4',
+            'tenant': security.DEFAULT_PROJECT_ID,
+            'project_name': 'test-project',
+            'is_admin': admin
+        })
     else:
-        return auth_context.MistralContext(
-            user_id='9-0-44-5',
-            project_id='99-88-33',
-            user_name='test-user',
-            project_name='test-another',
-            is_admin=admin
-        )
+        return auth_context.MistralContext.from_dict({
+            'user_name': 'test-user',
+            'user': '9-0-44-5',
+            'tenant': '99-88-33',
+            'project_name': 'test-another',
+            'is_admin': admin
+        })
 
 
 def register_action_class(name, cls, attributes=None, desc=None):
@@ -80,7 +81,7 @@ def register_action_class(name, cls, attributes=None, desc=None):
 
 class FakeHTTPResponse(object):
     def __init__(self, text, status_code, reason=None, headers=None,
-                 history=None, encoding='utf8', url='', cookies=None,
+                 history=None, encoding='utf-8', url='', cookies=None,
                  elapsed=None):
         self.text = text
         self.content = text
@@ -93,14 +94,13 @@ class FakeHTTPResponse(object):
         self.cookies = cookies or {}
         self.elapsed = elapsed or datetime.timedelta(milliseconds=123)
 
-    def json(self):
-        return json.loads(self.text)
+    def json(self, **kwargs):
+        return json.loads(self.text, **kwargs)
 
 
 class BaseTest(base.BaseTestCase):
     def setUp(self):
         super(BaseTest, self).setUp()
-
         self.addCleanup(spec_parser.clear_caches)
 
     def register_action_class(self, name, cls, attributes=None, desc=None):
@@ -142,7 +142,7 @@ class BaseTest(base.BaseTestCase):
         found = len(filtered_items)
 
         if found != count:
-            LOG.info("[failed test ctx] items=%s, expected_props=%s" % (str(
+            LOG.info("[failed test ctx] items=%s, expected_props=%s", (str(
                 items), props))
             self.fail("Wrong number of items found [props=%s, "
                       "expected=%s, found=%s]" % (props, count, found))
@@ -240,8 +240,14 @@ class DbTestCase(BaseTest):
         if cfg.CONF.database.connection.startswith('sqlite'):
             cfg.CONF.set_default('connection', 'sqlite://', group='database')
 
-        cfg.CONF.set_default("openstack_actions_mapping_path",
-                             "tests/resources/openstack/test_mapping.json")
+        # This option is normally registered in sync_db.py so we have to
+        # register it here specifically for tests.
+        cfg.CONF.register_opt(config.os_actions_mapping_path)
+
+        cfg.CONF.set_default(
+            'openstack_actions_mapping_path',
+            'tests/resources/openstack/test_mapping.json'
+        )
         cfg.CONF.set_default('max_overflow', -1, group='database')
         cfg.CONF.set_default('max_pool_size', 1000, group='database')
 

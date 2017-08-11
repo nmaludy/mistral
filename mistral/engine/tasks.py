@@ -44,7 +44,7 @@ class Task(object):
     """
 
     def __init__(self, wf_ex, wf_spec, task_spec, ctx, task_ex=None,
-                 unique_key=None, waiting=False):
+                 unique_key=None, waiting=False, triggered_by=None):
         self.wf_ex = wf_ex
         self.task_spec = task_spec
         self.ctx = ctx
@@ -52,6 +52,7 @@ class Task(object):
         self.wf_spec = wf_spec
         self.unique_key = unique_key
         self.waiting = waiting
+        self.triggered_by = triggered_by
         self.reset_flag = False
         self.created = False
         self.state_changed = False
@@ -71,6 +72,14 @@ class Task(object):
     @abc.abstractmethod
     def on_action_complete(self, action_ex):
         """Handle action completion.
+
+        :param action_ex: Action execution.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def on_action_update(self, action_ex):
+        """Handle action update.
 
         :param action_ex: Action execution.
         """
@@ -190,6 +199,26 @@ class Task(object):
 
         dispatcher.dispatch_workflow_commands(self.wf_ex, cmds)
 
+    @profiler.trace('task-update')
+    def update(self, state, state_info=None):
+        """Update task and set specified state.
+
+        Method sets specified task state.
+
+        :param state: New task state.
+        :param state_info: New state information (i.e. error message).
+        """
+
+        assert self.task_ex
+
+        # Ignore if task already completed.
+        if states.is_completed(self.task_ex.state):
+            return
+
+        # Update only if state transition is valid.
+        if states.is_valid_transition(self.task_ex.state, state):
+            self.set_state(state, state_info)
+
     def _before_task_start(self):
         policies_spec = self.task_spec.get_policies()
 
@@ -215,6 +244,7 @@ class Task(object):
             'name': task_name,
             'workflow_execution_id': self.wf_ex.id,
             'workflow_name': self.wf_ex.workflow_name,
+            'workflow_namespace': self.wf_ex.workflow_namespace,
             'workflow_id': self.wf_ex.workflow_id,
             'state': state,
             'state_info': state_info,
@@ -226,6 +256,9 @@ class Task(object):
             'project_id': self.wf_ex.project_id,
             'type': task_type
         }
+
+        if self.triggered_by:
+            values['runtime_context']['triggered_by'] = self.triggered_by
 
         self.task_ex = db_api.create_task_execution(values)
 
@@ -263,6 +296,10 @@ class RegularTask(Task):
 
         self.complete(state, state_info)
 
+    @profiler.trace('regular-task-on-action-update', hide_args=True)
+    def on_action_update(self, action_ex):
+        self.update(action_ex.state)
+
     @profiler.trace('task-run')
     def run(self):
         if not self.task_ex:
@@ -280,8 +317,10 @@ class RegularTask(Task):
         self._create_task_execution()
 
         LOG.debug(
-            'Starting task [workflow=%s, task_spec=%s, init_state=%s]' %
-            (self.wf_ex.name, self.task_spec, self.task_ex.state)
+            'Starting task [workflow=%s, task=%s, init_state=%s]',
+            self.wf_ex.name,
+            self.task_spec.get_name(),
+            self.task_ex.state
         )
 
         self._before_task_start()
@@ -307,6 +346,7 @@ class RegularTask(Task):
         self.set_state(states.RUNNING, None, processed=False)
 
         self._update_inbound_context()
+        self._update_triggered_by()
         self._reset_actions()
         self._schedule_actions()
 
@@ -318,6 +358,14 @@ class RegularTask(Task):
         self.ctx = wf_ctrl.get_task_inbound_context(self.task_spec)
 
         utils.update_dict(self.task_ex.in_context, self.ctx)
+
+    def _update_triggered_by(self):
+        assert self.task_ex
+
+        if not self.triggered_by:
+            return
+
+        self.task_ex.runtime_context['triggered_by'] = self.triggered_by
 
     def _reset_actions(self):
         """Resets task state.
@@ -404,7 +452,9 @@ class RegularTask(Task):
         )
 
         if action_def.spec:
-            return actions.AdHocAction(action_def, task_ex=self.task_ex)
+            return actions.AdHocAction(action_def, task_ex=self.task_ex,
+                                       task_ctx=self.ctx,
+                                       wf_ctx=self.wf_ex.context)
 
         return actions.PythonAction(action_def, task_ex=self.task_ex)
 

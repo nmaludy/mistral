@@ -43,7 +43,8 @@ def wrap_wsme_controller_exception(func):
         except (exc.MistralException, exc.MistralError) as e:
             pecan.response.translatable_error = e
 
-            LOG.error('Error during API call: %s' % str(e))
+            LOG.error('Error during API call: %s', str(e))
+
             raise wsme_exc.ClientSideError(
                 msg=six.text_type(e),
                 status_code=e.http_code
@@ -63,11 +64,13 @@ def wrap_pecan_controller_exception(func):
         try:
             return func(*args, **kwargs)
         except (exc.MistralException, exc.MistralError) as e:
-            LOG.error('Error during API call: %s' % str(e))
+            LOG.error('Error during API call: %s', str(e))
+
             return webob.Response(
                 status=e.http_code,
                 content_type='application/json',
-                body=json.dumps(dict(faultstring=six.text_type(e)))
+                body=json.dumps(dict(faultstring=six.text_type(e))),
+                charset='UTF-8'
             )
 
     return wrapped
@@ -128,8 +131,9 @@ def get_all(list_cls, cls, get_all_function, get_function,
             all_projects=False, **filters):
     """Return a list of cls.
 
-    :param list_cls: Collection class (e.g.: Actions, Workflows, ...).
-    :param cls: Class (e.g.: Action, Workflow, ...).
+    :param list_cls: REST Resource collection class (e.g.: Actions,
+        Workflows, ...)
+    :param cls: REST Resource class (e.g.: Action, Workflow, ...)
     :param get_all_function: Request function to get all elements with
                              filtering (limit, marker, sort_keys, sort_dirs,
                              fields)
@@ -160,6 +164,7 @@ def get_all(list_cls, cls, get_all_function, get_function,
     # Admin user can get all tenants resources, no matter they are private or
     # public.
     insecure = False
+
     if (all_projects or
             (auth_ctx.ctx().is_admin and filters.get('project_id', ''))):
         insecure = True
@@ -169,36 +174,11 @@ def get_all(list_cls, cls, get_all_function, get_function,
     if marker:
         marker_obj = get_function(marker)
 
-    list_to_return = []
+    rest_resources = []
 
-    if resource_function:
-        with db_api.transaction():
-            # do not filter fields yet, resource_function needs the ORM object
-            db_list = get_all_function(
-                limit=limit,
-                marker=marker_obj,
-                sort_keys=sort_keys,
-                sort_dirs=sort_dirs,
-                insecure=insecure,
-                **filters
-            )
-
-            for data in db_list:
-                obj = resource_function(data)
-
-                # filter fields using a loop instead of the ORM
-                if fields:
-                    data = []
-                    for f in fields:
-                        if hasattr(obj, f):
-                            data.append(getattr(obj, f))
-
-                    dict_data = dict(zip(fields, data))
-                else:
-                    dict_data = obj.to_dict()
-
-                list_to_return.append(cls.from_dict(dict_data))
-    else:
+    # If only certain fields are requested then we ignore "resource_function"
+    # parameter because it doesn't make sense anymore.
+    if fields:
         db_list = get_all_function(
             limit=limit,
             marker=marker_obj,
@@ -209,14 +189,33 @@ def get_all(list_cls, cls, get_all_function, get_function,
             **filters
         )
 
-        for data in db_list:
-            dict_data = (dict(zip(fields, data)) if fields else
-                         data.to_dict())
+        for obj_values in db_list:
+            # Note: in case if only certain fields have been requested
+            # "db_list" contains tuples with values of db objects.
+            rest_resources.append(
+                cls.from_tuples(zip(fields, obj_values))
+            )
+    else:
+        with db_api.transaction():
+            db_models = get_all_function(
+                limit=limit,
+                marker=marker_obj,
+                sort_keys=sort_keys,
+                sort_dirs=sort_dirs,
+                insecure=insecure,
+                **filters
+            )
 
-            list_to_return.append(cls.from_dict(dict_data))
+            for db_model in db_models:
+                if resource_function:
+                    rest_resource = resource_function(db_model)
+                else:
+                    rest_resource = cls.from_db_model(db_model)
+
+                rest_resources.append(rest_resource)
 
     return list_cls.convert_with_links(
-        list_to_return,
+        rest_resources,
         limit,
         pecan.request.host_url,
         sort_keys=','.join(sort_keys),

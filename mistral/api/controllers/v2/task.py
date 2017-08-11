@@ -26,11 +26,11 @@ from mistral.api.controllers.v2 import resources
 from mistral.api.controllers.v2 import types
 from mistral import context
 from mistral.db.v2 import api as db_api
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
+from mistral.rpc import clients as rpc
 from mistral.utils import filter_utils
 from mistral.utils import rest_utils
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import data_flow
 from mistral.workflow import states
 
@@ -41,7 +41,8 @@ STATE_TYPES = wtypes.Enum(str, states.IDLE, states.RUNNING, states.SUCCESS,
 
 
 def _get_task_resource_with_result(task_ex):
-    task = resources.Task.from_dict(task_ex.to_dict())
+    task = resources.Task.from_db_model(task_ex)
+
     task.result = json.dumps(data_flow.get_task_execution_result(task_ex))
 
     return task
@@ -136,9 +137,12 @@ class TasksController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.Task, wtypes.text)
     def get(self, id):
-        """Return the specified task."""
+        """Return the specified task.
+
+        :param id: UUID of task to retrieve
+        """
         acl.enforce('tasks:get', context.ctx())
-        LOG.info("Fetch task [id=%s]" % id)
+        LOG.info("Fetch task [id=%s]", id)
 
         with db_api.transaction():
             task_ex = db_api.get_task_execution(id)
@@ -244,7 +248,7 @@ class TasksController(rest.RestController):
         """
         acl.enforce('tasks:update', context.ctx())
 
-        LOG.info("Update task execution [id=%s, task=%s]" % (id, task))
+        LOG.info("Update task execution [id=%s, task=%s]", id, task)
 
         with db_api.transaction():
             task_ex = db_api.get_task_execution(id)

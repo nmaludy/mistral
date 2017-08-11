@@ -22,8 +22,10 @@ from oslo_service import service
 
 from mistral.db.v2 import api as db_api
 from mistral.engine import engine_server
-from mistral.engine import executor_server
-from mistral.engine.rpc_backend import rpc
+from mistral.executors import base as exe
+from mistral.executors import executor_server
+from mistral.rpc import base as rpc_base
+from mistral.rpc import clients as rpc_clients
 from mistral.tests.unit import base
 from mistral.workflow import states
 
@@ -56,41 +58,44 @@ class EngineTestCase(base.DbTestCase):
         cfg.CONF.set_default('rpc_backend', 'fake')
 
         # Drop all RPC objects (transport, clients).
-        rpc.cleanup()
+        rpc_base.cleanup()
+        rpc_clients.cleanup()
+        exe.cleanup()
 
-        self.engine_client = rpc.get_engine_client()
-        self.executor_client = rpc.get_executor_client()
+        self.threads = []
 
-        LOG.info("Starting engine and executor threads...")
+        # Start remote executor.
+        if cfg.CONF.executor.type == 'remote':
+            LOG.info("Starting remote executor threads...")
+            self.executor_client = rpc_clients.get_executor_client()
+            exe_svc = executor_server.get_oslo_service(setup_profiler=False)
+            self.executor = exe_svc.executor
+            self.threads.append(eventlet.spawn(launch_service, exe_svc))
+            self.addCleanup(exe_svc.stop, True)
 
-        engine_service = engine_server.get_oslo_service(setup_profiler=False)
-        executor_service = executor_server.get_oslo_service(
-            setup_profiler=False
-        )
-
-        self.engine = engine_service.engine
-        self.executor = executor_service.executor
-
-        self.threads = [
-            eventlet.spawn(launch_service, executor_service),
-            eventlet.spawn(launch_service, engine_service)
-        ]
+        # Start engine.
+        LOG.info("Starting engine threads...")
+        self.engine_client = rpc_clients.get_engine_client()
+        eng_svc = engine_server.get_oslo_service(setup_profiler=False)
+        self.engine = eng_svc.engine
+        self.threads.append(eventlet.spawn(launch_service, eng_svc))
+        self.addCleanup(eng_svc.stop, True)
 
         self.addOnException(self.print_executions)
-
-        self.addCleanup(executor_service.stop, True)
-        self.addCleanup(engine_service.stop, True)
         self.addCleanup(self.kill_threads)
 
         # Make sure that both services fully started, otherwise
         # the test may run too early.
-        executor_service.wait_started()
-        engine_service.wait_started()
+        if cfg.CONF.executor.type == 'remote':
+            exe_svc.wait_started()
+
+        eng_svc.wait_started()
 
     def kill_threads(self):
         LOG.info("Finishing engine and executor threads...")
 
-        [thread.kill() for thread in self.threads]
+        for thread in self.threads:
+            thread.kill()
 
     @staticmethod
     def print_executions(exc_info=None):
@@ -203,6 +208,10 @@ class EngineTestCase(base.DbTestCase):
     def is_task_processed(self, task_ex_id):
         return db_api.get_task_execution(task_ex_id).processed
 
+    def await_task_running(self, ex_id, delay=DEFAULT_DELAY,
+                           timeout=DEFAULT_TIMEOUT):
+        self.await_task_state(ex_id, states.RUNNING, delay, timeout)
+
     def await_task_success(self, ex_id, delay=DEFAULT_DELAY,
                            timeout=DEFAULT_TIMEOUT):
         self.await_task_state(ex_id, states.SUCCESS, delay, timeout)
@@ -214,6 +223,10 @@ class EngineTestCase(base.DbTestCase):
     def await_task_cancelled(self, ex_id, delay=DEFAULT_DELAY,
                              timeout=DEFAULT_TIMEOUT):
         self.await_task_state(ex_id, states.CANCELLED, delay, timeout)
+
+    def await_task_paused(self, ex_id, delay=DEFAULT_DELAY,
+                          timeout=DEFAULT_TIMEOUT):
+        self.await_task_state(ex_id, states.PAUSED, delay, timeout)
 
     def await_task_delayed(self, ex_id, delay=DEFAULT_DELAY,
                            timeout=DEFAULT_TIMEOUT):
@@ -235,6 +248,10 @@ class EngineTestCase(base.DbTestCase):
             delay,
             timeout
         )
+
+    def await_workflow_running(self, ex_id, delay=DEFAULT_DELAY,
+                               timeout=DEFAULT_TIMEOUT):
+        self.await_workflow_state(ex_id, states.RUNNING, delay, timeout)
 
     def await_workflow_success(self, ex_id, delay=DEFAULT_DELAY,
                                timeout=DEFAULT_TIMEOUT):

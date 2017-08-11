@@ -22,7 +22,7 @@ from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
 from mistral.services import scheduler
 from mistral.tests.unit import base
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
 
 
 FACTORY_METHOD_PATH = (
@@ -62,7 +62,7 @@ def compare_context_values(expected, actual):
 
 
 def target_check_context_method(expected_project_id):
-    actual_project_id = auth_context.ctx()._BaseContext__values['project_id']
+    actual_project_id = auth_context.ctx().project_id
     compare_context_values(expected_project_id, actual_project_id)
 
 
@@ -152,8 +152,9 @@ class SchedulerServiceTest(base.DbTestCase):
         default_context = base.get_context(default=True)
         auth_context.set_ctx(default_context)
         default_project_id = (
-            default_context._BaseContext__values['project_id']
+            default_context.project_id
         )
+
         method_args1 = {'expected_project_id': default_project_id}
 
         scheduler.schedule_call(
@@ -166,7 +167,7 @@ class SchedulerServiceTest(base.DbTestCase):
         second_context = base.get_context(default=False)
         auth_context.set_ctx(second_context)
         second_project_id = (
-            second_context._BaseContext__values['project_id']
+            second_context.project_id
         )
         method_args2 = {'expected_project_id': second_project_id}
 
@@ -195,7 +196,7 @@ class SchedulerServiceTest(base.DbTestCase):
     def test_scheduler_with_serializer(self, factory):
         target_method = 'run_something'
 
-        task_result = wf_utils.Result('data', 'error')
+        task_result = ml_actions.Result('data', 'error')
 
         method_args = {
             'name': 'task',
@@ -230,7 +231,7 @@ class SchedulerServiceTest(base.DbTestCase):
 
         result = factory().run_something.call_args[1].get('result')
 
-        self.assertIsInstance(result, wf_utils.Result)
+        self.assertIsInstance(result, ml_actions.Result)
         self.assertEqual('data', result.data)
         self.assertEqual('error', result.error)
 

@@ -14,10 +14,10 @@
 import base64
 from urlparse import urlparse
 
+from keystoneclient import service_catalog as ks_service_catalog
 from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
 from tempest.lib import decorators
-from tempest import test
 
 from mistral_tempest_tests.tests import base
 
@@ -29,7 +29,7 @@ class MultiVimActionsTests(base.TestCase):
     def resource_setup(cls):
         super(MultiVimActionsTests, cls).resource_setup()
 
-    @test.attr(type='openstack')
+    @decorators.attr(type='openstack')
     @decorators.idempotent_id('dadc9960-9c03-41a9-9a9d-7e97d527e6dd')
     def test_multi_vim_support_target_headers(self):
         client_1 = self.alt_client
@@ -57,7 +57,7 @@ class MultiVimActionsTests(base.TestCase):
             str(jsonutils.loads(result['output'])['result'][0]['id'])
         )
 
-    @test.attr(type='openstack')
+    @decorators.attr(type='openstack')
     @decorators.idempotent_id('bc0e9b99-62b0-4d96-95c9-016a3f69b02a')
     def test_multi_vim_support_target_headers_and_service_catalog(self):
         client_1 = self.alt_client
@@ -66,18 +66,35 @@ class MultiVimActionsTests(base.TestCase):
         # List stacks with client1, but with the target headers of client2,
         # and additionally with an invalid X-Target-Service-Catalog.
         extra_headers = _extract_target_headers_from_client(client_2)
-        service_dict = dict(client_2.auth_provider.cache[1])
 
-        for endpoint in service_dict['serviceCatalog']:
-            if endpoint['name'] == 'heat':
-                endpoint['endpoints'][0]['publicURL'] = "invalid"
+        # Use ServiceCatalog to eliminate differences between keystone v2 and
+        # v3.
+        token_data = client_2.auth_provider.auth_data[1]
+        service_catalog = ks_service_catalog.ServiceCatalog.factory(
+            token_data
+        ).get_data()
 
-        service_catalog = {
+        for service in service_catalog:
+            if service['name'] == 'heat':
+                for ep in service['endpoints']:
+                    if 'publicURL' in ep:
+                        ep['publicURL'] = "invalid"
+                    elif ep['interface'] == 'public':
+                        ep['url'] = "invalid"
+                        break
+                break
+
+        if 'catalog' in token_data:
+            token_data['catalog'] = service_catalog
+        else:
+            token_data['serviceCatalog'] = service_catalog
+
+        invalid_service_catalog = {
             "X-Target-Service-Catalog": base64.b64encode(
-                jsonutils.dumps(service_dict)
+                jsonutils.dumps(token_data)
             )
         }
-        extra_headers.update(service_catalog)
+        extra_headers.update(invalid_service_catalog)
         result = _execute_action(
             client_1,
             _get_list_stack_request(),

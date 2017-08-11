@@ -22,22 +22,24 @@ import json
 import mock
 from oslo_config import cfg
 import oslo_messaging
+from oslo_utils import uuidutils
 from webtest import app as webtest_app
 
 from mistral.api.controllers.v2 import execution
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import api as sql_db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import base as rpc_base
+from mistral.rpc import clients as rpc_clients
 from mistral.tests.unit.api import base
+from mistral.tests.unit import base as unit_base
 from mistral import utils
 from mistral.utils import rest_utils
 from mistral.workflow import states
-from oslo_utils import uuidutils
 
 # This line is needed for correct initialization of messaging config.
-oslo_messaging.get_transport(cfg.CONF)
+oslo_messaging.get_rpc_transport(cfg.CONF)
 
 
 WF_EX = models.WorkflowExecution(
@@ -130,7 +132,7 @@ MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 MOCK_ACTION_EXC = mock.MagicMock(side_effect=exc.ActionException())
 
 
-@mock.patch.object(rpc, '_IMPL_CLIENT', mock.Mock())
+@mock.patch.object(rpc_base, '_IMPL_CLIENT', mock.Mock())
 class TestExecutionsController(base.APITest):
     @mock.patch.object(db_api, 'get_workflow_execution', MOCK_WF_EX)
     def test_get(self):
@@ -158,7 +160,7 @@ class TestExecutionsController(base.APITest):
         mock.MagicMock(return_value=None)
     )
     @mock.patch.object(
-        rpc.EngineClient,
+        rpc_clients.EngineClient,
         'pause_workflow',
         MOCK_UPDATED_WF_EX
     )
@@ -181,7 +183,7 @@ class TestExecutionsController(base.APITest):
         'ensure_workflow_execution_exists',
         mock.MagicMock(return_value=None)
     )
-    @mock.patch.object(rpc.EngineClient, 'stop_workflow')
+    @mock.patch.object(rpc_clients.EngineClient, 'stop_workflow')
     def test_put_state_error(self, mock_stop_wf):
         update_exec = {
             'id': WF_EX['id'],
@@ -209,7 +211,7 @@ class TestExecutionsController(base.APITest):
         'ensure_workflow_execution_exists',
         mock.MagicMock(return_value=None)
     )
-    @mock.patch.object(rpc.EngineClient, 'stop_workflow')
+    @mock.patch.object(rpc_clients.EngineClient, 'stop_workflow')
     def test_put_state_cancelled(self, mock_stop_wf):
         update_exec = {
             'id': WF_EX['id'],
@@ -242,7 +244,7 @@ class TestExecutionsController(base.APITest):
         'ensure_workflow_execution_exists',
         mock.MagicMock(return_value=None)
     )
-    @mock.patch.object(rpc.EngineClient, 'resume_workflow')
+    @mock.patch.object(rpc_clients.EngineClient, 'resume_workflow')
     def test_put_state_resume(self, mock_resume_wf):
         update_exec = {
             'id': WF_EX['id'],
@@ -296,7 +298,7 @@ class TestExecutionsController(base.APITest):
         'ensure_workflow_execution_exists',
         mock.MagicMock(return_value=None)
     )
-    @mock.patch.object(rpc.EngineClient, 'stop_workflow')
+    @mock.patch.object(rpc_clients.EngineClient, 'stop_workflow')
     def test_put_state_info_unset(self, mock_stop_wf):
         update_exec = {
             'id': WF_EX['id'],
@@ -453,7 +455,7 @@ class TestExecutionsController(base.APITest):
 
         self.assertIn(expected_fault, resp.json['faultstring'])
 
-    @mock.patch.object(rpc.EngineClient, 'start_workflow')
+    @mock.patch.object(rpc_clients.EngineClient, 'start_workflow')
     def test_post(self, f):
         f.return_value = WF_EX.to_dict()
 
@@ -466,12 +468,17 @@ class TestExecutionsController(base.APITest):
 
         f.assert_called_once_with(
             exec_dict['workflow_id'],
+            '',
             json.loads(exec_dict['input']),
             exec_dict['description'],
             **json.loads(exec_dict['params'])
         )
 
-    @mock.patch.object(rpc.EngineClient, 'start_workflow', MOCK_ACTION_EXC)
+    @mock.patch.object(
+        rpc_clients.EngineClient,
+        'start_workflow',
+        MOCK_ACTION_EXC
+    )
     def test_post_throws_exception(self):
         context = self.assertRaises(
             webtest_app.AppError,
@@ -630,3 +637,40 @@ class TestExecutionsController(base.APITest):
         resource_function = kwargs['resource_function']
 
         self.assertIsNone(resource_function)
+
+    @mock.patch('mistral.db.v2.api.get_workflow_executions')
+    @mock.patch('mistral.context.MistralContext.from_environ')
+    def test_get_all_projects_admin(self, mock_context, mock_get_execs):
+        admin_ctx = unit_base.get_context(admin=True)
+        mock_context.return_value = admin_ctx
+
+        resp = self.app.get('/v2/executions?all_projects=true')
+
+        self.assertEqual(200, resp.status_int)
+
+        self.assertTrue(mock_get_execs.call_args[1].get('insecure', False))
+
+    def test_get_all_projects_normal_user(self):
+        resp = self.app.get(
+            '/v2/executions?all_projects=true',
+            expect_errors=True
+        )
+
+        self.assertEqual(403, resp.status_int)
+
+    @mock.patch('mistral.db.v2.api.get_workflow_executions')
+    @mock.patch('mistral.context.MistralContext.from_environ')
+    def test_get_all_filter_by_project_id(self, mock_context, mock_get_execs):
+        admin_ctx = unit_base.get_context(admin=True)
+        mock_context.return_value = admin_ctx
+
+        fake_project_id = uuidutils.generate_uuid()
+
+        resp = self.app.get('/v2/executions?project_id=%s' % fake_project_id)
+
+        self.assertEqual(200, resp.status_int)
+
+        self.assertTrue(mock_get_execs.call_args[1].get('insecure', False))
+        self.assertTrue(
+            mock_get_execs.call_args[1].get('project_id', fake_project_id)
+        )

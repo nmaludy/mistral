@@ -22,17 +22,16 @@ import six
 import smtplib
 import time
 
-from mistral.actions import base
 from mistral import exceptions as exc
 from mistral.utils import javascript
 from mistral.utils import ssh_utils
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions
 from oslo_log import log as logging
 
 LOG = logging.getLogger(__name__)
 
 
-class EchoAction(base.Action):
+class EchoAction(actions.Action):
     """Echo action.
 
     This action just returns a configured value as a result without doing
@@ -45,16 +44,16 @@ class EchoAction(base.Action):
     def __init__(self, output):
         self.output = output
 
-    def run(self):
-        LOG.info('Running echo action [output=%s]' % self.output)
+    def run(self, context):
+        LOG.info('Running echo action [output=%s]', self.output)
 
         return self.output
 
-    def test(self):
+    def test(self, context):
         return 'Echo'
 
 
-class NoOpAction(base.Action):
+class NoOpAction(actions.Action):
     """No-operation action.
 
     This action does nothing. It can be mostly useful for testing and
@@ -63,12 +62,12 @@ class NoOpAction(base.Action):
     def __init__(self):
         pass
 
-    def run(self):
+    def run(self, context):
         LOG.info('Running no-op action')
 
         return None
 
-    def test(self):
+    def test(self, context):
         return None
 
 
@@ -78,7 +77,7 @@ class AsyncNoOpAction(NoOpAction):
         return False
 
 
-class FailAction(base.Action):
+class FailAction(actions.Action):
     """'Always fail' action.
 
     This action just always throws an instance of ActionException.
@@ -89,16 +88,16 @@ class FailAction(base.Action):
     def __init__(self):
         pass
 
-    def run(self):
+    def run(self, context):
         LOG.info('Running fail action.')
 
         raise exc.ActionException('Fail action expected exception.')
 
-    def test(self):
+    def test(self, context):
         raise exc.ActionException('Fail action expected exception.')
 
 
-class HTTPAction(base.Action):
+class HTTPAction(actions.Action):
     """Constructs an HTTP action.
 
     :param url: URL for the new HTTP request.
@@ -158,22 +157,24 @@ class HTTPAction(base.Action):
         self.proxies = proxies
         self.verify = verify
 
-    def run(self):
-        LOG.info("Running HTTP action "
-                 "[url=%s, method=%s, params=%s, body=%s, headers=%s,"
-                 " cookies=%s, auth=%s, timeout=%s, allow_redirects=%s,"
-                 " proxies=%s, verify=%s]" %
-                 (self.url,
-                  self.method,
-                  self.params,
-                  self.body,
-                  self.headers,
-                  self.cookies,
-                  self.auth,
-                  self.timeout,
-                  self.allow_redirects,
-                  self.proxies,
-                  self.verify))
+    def run(self, context):
+        LOG.info(
+            "Running HTTP action "
+            "[url=%s, method=%s, params=%s, body=%s, headers=%s,"
+            " cookies=%s, auth=%s, timeout=%s, allow_redirects=%s,"
+            " proxies=%s, verify=%s]",
+            self.url,
+            self.method,
+            self.params,
+            self.body,
+            self.headers,
+            self.cookies,
+            self.auth,
+            self.timeout,
+            self.allow_redirects,
+            self.proxies,
+            self.verify
+        )
 
         try:
             resp = requests.request(
@@ -193,15 +194,24 @@ class HTTPAction(base.Action):
             raise exc.ActionException("Failed to send HTTP request: %s" % e)
 
         LOG.info(
-            "HTTP action response:\n%s\n%s" % (resp.status_code, resp.content)
+            "HTTP action response:\n%s\n%s",
+            resp.status_code,
+            resp.content
         )
+
+        # TODO(akuznetsova): Need to refactor Mistral serialiser and
+        # deserializer to have an ability to pass needed encoding and work
+        # with it. Now it can process only default 'utf-8' encoding.
+        # Appropriate bug #1676411 was created.
 
         # Represent important resp data as a dictionary.
         try:
-            content = resp.json()
+            content = resp.json(encoding=resp.encoding)
         except Exception as e:
             LOG.debug("HTTP action response is not json.")
             content = resp.content
+            if content and resp.encoding != 'utf-8':
+                content = content.decode(resp.encoding).encode('utf-8')
 
         _result = {
             'content': content,
@@ -216,16 +226,17 @@ class HTTPAction(base.Action):
         }
 
         if resp.status_code not in range(200, 307):
-            return wf_utils.Result(error=_result)
+            return actions.Result(error=_result)
 
         return _result
 
-    def test(self):
+    def test(self, context):
         # TODO(rakhmerov): Implement.
         return None
 
 
 class MistralHTTPAction(HTTPAction):
+
     def __init__(self,
                  action_context,
                  url,
@@ -268,11 +279,11 @@ class MistralHTTPAction(HTTPAction):
     def is_sync(self):
         return False
 
-    def test(self):
+    def test(self, context):
         return None
 
 
-class SendEmailAction(base.Action):
+class SendEmailAction(actions.Action):
     def __init__(self, from_addr, to_addrs, smtp_server,
                  smtp_password=None, subject=None, body=None):
         # TODO(dzimine): validate parameters
@@ -287,11 +298,16 @@ class SendEmailAction(base.Action):
         self.sender = from_addr
         self.password = smtp_password
 
-    def run(self):
-        LOG.info("Sending email message "
-                 "[from=%s, to=%s, subject=%s, using smtp=%s, body=%s...]" %
-                 (self.sender, self.to, self.subject,
-                  self.smtp_server, self.body[:128]))
+    def run(self, context):
+        LOG.info(
+            "Sending email message "
+            "[from=%s, to=%s, subject=%s, using smtp=%s, body=%s...]",
+            self.sender,
+            self.to,
+            self.subject,
+            self.smtp_server,
+            self.body[:128]
+        )
 
         message = text.MIMEText(self.body, _charset='utf-8')
         message['Subject'] = header.Header(self.subject, 'utf-8')
@@ -315,16 +331,21 @@ class SendEmailAction(base.Action):
             raise exc.ActionException("Failed to send an email message: %s"
                                       % e)
 
-    def test(self):
+    def test(self, context):
         # Just logging the operation since this action is not supposed
         # to return a result.
-        LOG.info("Sending email message "
-                 "[from=%s, to=%s, subject=%s, using smtp=%s, body=%s...]" %
-                 (self.sender, self.to, self.subject,
-                  self.smtp_server, self.body[:128]))
+        LOG.info(
+            "Sending email message "
+            "[from=%s, to=%s, subject=%s, using smtp=%s, body=%s...]",
+            self.sender,
+            self.to,
+            self.subject,
+            self.smtp_server,
+            self.body[:128]
+        )
 
 
-class SSHAction(base.Action):
+class SSHAction(actions.Action):
     """Runs Secure Shell (SSH) command on provided single or multiple hosts.
 
     It is allowed to provide either a single host or a list of hosts in
@@ -352,7 +373,7 @@ class SSHAction(base.Action):
             'private_key_filename': self.private_key_filename
         }
 
-    def run(self):
+    def run(self, context):
         def raise_exc(parent_exc=None):
             message = ("Failed to execute ssh cmd "
                        "'%s' on %s" % (self.cmd, self.host))
@@ -383,7 +404,7 @@ class SSHAction(base.Action):
         except Exception as e:
             return raise_exc(parent_exc=e)
 
-    def test(self):
+    def test(self, context):
         # TODO(rakhmerov): Implement.
         return None
 
@@ -416,30 +437,36 @@ class SSHProxiedAction(SSHAction):
         )
 
 
-class JavaScriptAction(base.Action):
+class JavaScriptAction(actions.Action):
     """Evaluates given JavaScript.
 
     """
-    def __init__(self, script, context=None):
-        self.script = script
-        self.context = context
 
-    def run(self):
+    def __init__(self, script, context=None):
+        """Context here refers to a javasctript context
+
+        Not the usual mistral context. That is passed during the run method
+        """
+
+        self.script = script
+        self.js_context = context
+
+    def run(self, context):
         try:
             script = """function f() {
                 %s
             }
             f()
             """ % self.script
-            return javascript.evaluate(script, self.context)
+            return javascript.evaluate(script, self.js_context)
         except Exception as e:
             raise exc.ActionException("JavaScriptAction failed: %s" % str(e))
 
-    def test(self):
+    def test(self, context):
         return self.script
 
 
-class SleepAction(base.Action):
+class SleepAction(actions.Action):
     """Sleep action.
 
     This action sleeps for given amount of seconds. It can be mostly useful
@@ -452,20 +479,20 @@ class SleepAction(base.Action):
         except ValueError:
             self._seconds = 0
 
-    def run(self):
-        LOG.info('Running sleep action [seconds=%s]' % self._seconds)
+    def run(self, context):
+        LOG.info('Running sleep action [seconds=%s]', self._seconds)
 
         time.sleep(self._seconds)
 
         return None
 
-    def test(self):
+    def test(self, context):
         time.sleep(1)
 
         return None
 
 
-class TestDictAction(base.Action):
+class TestDictAction(actions.Action):
     """Generates test dict."""
 
     def __init__(self, size=0, key_prefix='', val=''):
@@ -473,10 +500,12 @@ class TestDictAction(base.Action):
         self.key_prefix = key_prefix
         self.val = val
 
-    def run(self):
+    def run(self, context):
         LOG.info(
-            'Running test_dict action [size=%s, key_prefix=%s, val=%s]' %
-            (self.size, self.key_prefix, self.val)
+            'Running test_dict action [size=%s, key_prefix=%s, val=%s]',
+            self.size,
+            self.key_prefix,
+            self.val
         )
 
         res = {}
@@ -486,5 +515,5 @@ class TestDictAction(base.Action):
 
         return res
 
-    def test(self):
+    def test(self, context):
         return {}

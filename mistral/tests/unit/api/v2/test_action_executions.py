@@ -25,15 +25,16 @@ import oslo_messaging
 from mistral.api.controllers.v2 import action_execution
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import base as rpc_base
+from mistral.rpc import clients as rpc_clients
 from mistral.tests.unit.api import base
 from mistral.utils import rest_utils
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
 
 # This line is needed for correct initialization of messaging config.
-oslo_messaging.get_transport(cfg.CONF)
+oslo_messaging.get_rpc_transport(cfg.CONF)
 
 
 ACTION_EX_DB = models.ActionExecution(
@@ -139,6 +140,18 @@ CANCELLED_ACTION_EX_DB['task_name'] = 'task1'
 CANCELLED_ACTION = copy.deepcopy(ACTION_EX)
 CANCELLED_ACTION['state'] = 'CANCELLED'
 
+PAUSED_ACTION_EX_DB = copy.copy(ACTION_EX_DB).to_dict()
+PAUSED_ACTION_EX_DB['state'] = 'PAUSED'
+PAUSED_ACTION_EX_DB['task_name'] = 'task1'
+PAUSED_ACTION = copy.deepcopy(ACTION_EX)
+PAUSED_ACTION['state'] = 'PAUSED'
+
+RUNNING_ACTION_EX_DB = copy.copy(ACTION_EX_DB).to_dict()
+RUNNING_ACTION_EX_DB['state'] = 'RUNNING'
+RUNNING_ACTION_EX_DB['task_name'] = 'task1'
+RUNNING_ACTION = copy.deepcopy(ACTION_EX)
+RUNNING_ACTION['state'] = 'RUNNING'
+
 ERROR_ACTION_EX = copy.copy(ACTION_EX_DB).to_dict()
 ERROR_ACTION_EX['state'] = 'ERROR'
 ERROR_ACTION_EX['task_name'] = 'task1'
@@ -194,7 +207,7 @@ MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 MOCK_DELETE = mock.MagicMock(return_value=None)
 
 
-@mock.patch.object(rpc, '_IMPL_CLIENT', mock.Mock())
+@mock.patch.object(rpc_base, '_IMPL_CLIENT', mock.Mock())
 class TestActionExecutionsController(base.APITest):
     def setUp(self):
         super(TestActionExecutionsController, self).setUp()
@@ -223,7 +236,7 @@ class TestActionExecutionsController(base.APITest):
 
         self.assertEqual(404, resp.status_int)
 
-    @mock.patch.object(rpc.EngineClient, 'start_action')
+    @mock.patch.object(rpc_clients.EngineClient, 'start_action')
     def test_post(self, f):
         f.return_value = ACTION_EX_DB.to_dict()
 
@@ -251,7 +264,7 @@ class TestActionExecutionsController(base.APITest):
             run_sync=True
         )
 
-    @mock.patch.object(rpc.EngineClient, 'start_action')
+    @mock.patch.object(rpc_clients.EngineClient, 'start_action')
     def test_post_json(self, f):
         f.return_value = ACTION_EX_DB.to_dict()
 
@@ -278,7 +291,7 @@ class TestActionExecutionsController(base.APITest):
             save_result=True
         )
 
-    @mock.patch.object(rpc.EngineClient, 'start_action')
+    @mock.patch.object(rpc_clients.EngineClient, 'start_action')
     def test_post_without_input(self, f):
         f.return_value = ACTION_EX_DB.to_dict()
         f.return_value['output'] = {'result': '123'}
@@ -320,7 +333,7 @@ class TestActionExecutionsController(base.APITest):
 
         self.assertEqual(400, resp.status_int)
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put(self, f):
         f.return_value = UPDATED_ACTION_EX_DB
 
@@ -331,10 +344,10 @@ class TestActionExecutionsController(base.APITest):
 
         f.assert_called_once_with(
             UPDATED_ACTION['id'],
-            wf_utils.Result(data=ACTION_EX_DB.output)
+            ml_actions.Result(data=ACTION_EX_DB.output)
         )
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put_error_with_output(self, f):
         f.return_value = ERROR_ACTION_EX_WITH_OUTPUT
 
@@ -348,10 +361,10 @@ class TestActionExecutionsController(base.APITest):
 
         f.assert_called_once_with(
             ERROR_ACTION_WITH_OUTPUT['id'],
-            wf_utils.Result(error=ERROR_ACTION_RES_WITH_OUTPUT)
+            ml_actions.Result(error=ERROR_ACTION_RES_WITH_OUTPUT)
         )
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put_error_with_unknown_reason(self, f):
         f.return_value = ERROR_ACTION_EX_FOR_EMPTY_OUTPUT
         resp = self.app.put_json('/v2/action_executions/123', ERROR_ACTION)
@@ -361,10 +374,10 @@ class TestActionExecutionsController(base.APITest):
 
         f.assert_called_once_with(
             ERROR_ACTION_FOR_EMPTY_OUTPUT['id'],
-            wf_utils.Result(error=DEFAULT_ERROR_OUTPUT)
+            ml_actions.Result(error=DEFAULT_ERROR_OUTPUT)
         )
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put_error_with_unknown_reason_output_none(self, f):
         f.return_value = ERROR_ACTION_EX_FOR_EMPTY_OUTPUT
         resp = self.app.put_json(
@@ -377,10 +390,10 @@ class TestActionExecutionsController(base.APITest):
 
         f.assert_called_once_with(
             ERROR_ACTION_FOR_EMPTY_OUTPUT['id'],
-            wf_utils.Result(error=DEFAULT_ERROR_OUTPUT)
+            ml_actions.Result(error=DEFAULT_ERROR_OUTPUT)
         )
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put_cancelled(self, on_action_complete_mock_func):
         on_action_complete_mock_func.return_value = CANCELLED_ACTION_EX_DB
 
@@ -391,11 +404,39 @@ class TestActionExecutionsController(base.APITest):
 
         on_action_complete_mock_func.assert_called_once_with(
             CANCELLED_ACTION['id'],
-            wf_utils.Result(cancel=True)
+            ml_actions.Result(cancel=True)
+        )
+
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_update')
+    def test_put_paused(self, on_action_update_mock_func):
+        on_action_update_mock_func.return_value = PAUSED_ACTION_EX_DB
+
+        resp = self.app.put_json('/v2/action_executions/123', PAUSED_ACTION)
+
+        self.assertEqual(200, resp.status_int)
+        self.assertDictEqual(PAUSED_ACTION, resp.json)
+
+        on_action_update_mock_func.assert_called_once_with(
+            PAUSED_ACTION['id'],
+            PAUSED_ACTION['state']
+        )
+
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_update')
+    def test_put_resume(self, on_action_update_mock_func):
+        on_action_update_mock_func.return_value = RUNNING_ACTION_EX_DB
+
+        resp = self.app.put_json('/v2/action_executions/123', RUNNING_ACTION)
+
+        self.assertEqual(200, resp.status_int)
+        self.assertDictEqual(RUNNING_ACTION, resp.json)
+
+        on_action_update_mock_func.assert_called_once_with(
+            RUNNING_ACTION['id'],
+            RUNNING_ACTION['state']
         )
 
     @mock.patch.object(
-        rpc.EngineClient,
+        rpc_clients.EngineClient,
         'on_action_complete',
         MOCK_NOT_FOUND
     )
@@ -410,7 +451,7 @@ class TestActionExecutionsController(base.APITest):
 
     def test_put_bad_state(self):
         action = copy.deepcopy(ACTION_EX)
-        action['state'] = 'PAUSED'
+        action['state'] = 'DELAYED'
 
         resp = self.app.put_json(
             '/v2/action_executions/123',
@@ -430,7 +471,7 @@ class TestActionExecutionsController(base.APITest):
 
         self.assertEqual(400, resp.status_int)
 
-    @mock.patch.object(rpc.EngineClient, 'on_action_complete')
+    @mock.patch.object(rpc_clients.EngineClient, 'on_action_complete')
     def test_put_without_result(self, f):
         action_ex = copy.deepcopy(UPDATED_ACTION)
         del action_ex['output']

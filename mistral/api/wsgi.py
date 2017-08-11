@@ -13,11 +13,5 @@
 #    limitations under the License.
 
 from mistral.api import app
-from mistral import config
 
-# By default, oslo.config parses the CLI args if no args is provided.
-# As a result, invoking this wsgi script from gunicorn leads to the error
-# with argparse complaining that the CLI options have already been parsed.
-config.parse_args(args=[])
-
-application = app.setup_app()
+application = app.init_wsgi()

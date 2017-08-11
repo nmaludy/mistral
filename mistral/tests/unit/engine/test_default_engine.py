@@ -23,13 +23,14 @@ from oslo_utils import uuidutils
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
 from mistral.engine import default_engine as d_eng
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.executors import base as exe
 from mistral.services import workbooks as wb_service
+from mistral.services import workflows as wf_service
 from mistral.tests.unit import base
 from mistral.tests.unit.engine import base as eng_test_base
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
 
 
 # Use the set_default method to set value otherwise in certain test cases
@@ -93,7 +94,7 @@ MOCK_ENVIRONMENT = mock.MagicMock(return_value=ENVIRONMENT_DB)
 MOCK_NOT_FOUND = mock.MagicMock(side_effect=exc.DBEntityNotFoundError())
 
 
-@mock.patch.object(rpc, 'get_executor_client', mock.Mock())
+@mock.patch.object(exe, 'get_executor', mock.Mock())
 class DefaultEngineTest(base.DbTestCase):
     def setUp(self):
         super(DefaultEngineTest, self).setUp()
@@ -110,6 +111,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             wf_input,
             'my execution',
             task_name='task2'
@@ -154,6 +156,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             wf_input,
             task_name='task1'
         )
@@ -200,6 +203,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             wf_input,
             env=env,
             task_name='task2')
@@ -221,6 +225,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             wf_input,
             env='test',
             task_name='task2'
@@ -238,6 +243,7 @@ class DefaultEngineTest(base.DbTestCase):
             exc.InputException,
             self.engine.start_workflow,
             'wb.wf',
+            '',
             {
                 'param1': '<% env().key1 %>',
                 'param2': 'some value'
@@ -246,13 +252,14 @@ class DefaultEngineTest(base.DbTestCase):
             task_name='task2'
         )
 
-        self.assertEqual("Environment is not found: foo", e.message)
+        self.assertEqual("Environment is not found: foo", str(e))
 
     def test_start_workflow_with_env_type_error(self):
         e = self.assertRaises(
             exc.InputException,
             self.engine.start_workflow,
             'wb.wf',
+            '',
             {
                 'param1': '<% env().key1 %>',
                 'param2': 'some value'
@@ -261,28 +268,27 @@ class DefaultEngineTest(base.DbTestCase):
             task_name='task2'
         )
 
-        self.assertIn(
-            'Unexpected value type for environment',
-            e.message
-        )
+        self.assertIn('Unexpected value type for environment', str(e))
 
     def test_start_workflow_missing_parameters(self):
         e = self.assertRaises(
             exc.InputException,
             self.engine.start_workflow,
             'wb.wf',
+            '',
             None,
             task_name='task2'
         )
 
-        self.assertIn("Invalid input", e.message)
-        self.assertIn("missing=['param2']", e.message)
+        self.assertIn("Invalid input", str(e))
+        self.assertIn("missing=['param2']", str(e))
 
     def test_start_workflow_unexpected_parameters(self):
         e = self.assertRaises(
             exc.InputException,
             self.engine.start_workflow,
             'wb.wf',
+            '',
             {
                 'param1': 'Hey',
                 'param2': 'Hi',
@@ -291,8 +297,132 @@ class DefaultEngineTest(base.DbTestCase):
             task_name='task2'
         )
 
-        self.assertIn("Invalid input", e.message)
-        self.assertIn("unexpected=['unexpected_param']", e.message)
+        self.assertIn("Invalid input", str(e))
+        self.assertIn("unexpected=['unexpected_param']", str(e))
+
+    def test_on_action_update(self):
+        workflow = """
+        version: '2.0'
+        wf_async:
+            type: direct
+            tasks:
+                task1:
+                    action: std.async_noop
+                    on-success:
+                        - task2
+                task2:
+                    action: std.noop
+        """
+
+        # Start workflow.
+        wf_service.create_workflows(workflow)
+        wf_ex = self.engine.start_workflow('wf_async')
+
+        self.assertIsNotNone(wf_ex)
+        self.assertEqual(states.RUNNING, wf_ex.state)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+
+        task1_ex = task_execs[0]
+
+        self.assertEqual('task1', task1_ex.name)
+        self.assertEqual(states.RUNNING, task1_ex.state)
+
+        action_execs = db_api.get_action_executions(
+            task_execution_id=task1_ex.id
+        )
+
+        self.assertEqual(1, len(action_execs))
+
+        task1_action_ex = action_execs[0]
+
+        self.assertEqual(states.RUNNING, task1_action_ex.state)
+
+        # Pause action execution of 'task1'.
+        task1_action_ex = self.engine.on_action_update(
+            task1_action_ex.id,
+            states.PAUSED
+        )
+
+        self.assertIsInstance(task1_action_ex, models.ActionExecution)
+        self.assertEqual(states.PAUSED, task1_action_ex.state)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+        self.assertEqual(states.PAUSED, task_execs[0].state)
+        self.assertEqual(states.PAUSED, wf_ex.state)
+
+        action_execs = db_api.get_action_executions(
+            task_execution_id=task1_ex.id
+        )
+
+        self.assertEqual(1, len(action_execs))
+
+        task1_action_ex = action_execs[0]
+
+        self.assertEqual(states.PAUSED, task1_action_ex.state)
+
+    def test_on_action_update_non_async(self):
+        workflow = """
+        version: '2.0'
+        wf_sync:
+            type: direct
+            tasks:
+                task1:
+                    action: std.noop
+                    on-success:
+                    - task2
+                task2:
+                    action: std.noop
+        """
+
+        # Start workflow.
+        wf_service.create_workflows(workflow)
+        wf_ex = self.engine.start_workflow('wf_sync')
+
+        self.assertIsNotNone(wf_ex)
+        self.assertEqual(states.RUNNING, wf_ex.state)
+
+        with db_api.transaction():
+            # Note: We need to reread execution to access related tasks.
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            task_execs = wf_ex.task_executions
+
+        self.assertEqual(1, len(task_execs))
+
+        task1_ex = task_execs[0]
+
+        self.assertEqual('task1', task1_ex.name)
+        self.assertEqual(states.RUNNING, task1_ex.state)
+
+        action_execs = db_api.get_action_executions(
+            task_execution_id=task1_ex.id
+        )
+
+        self.assertEqual(1, len(action_execs))
+
+        task1_action_ex = action_execs[0]
+
+        self.assertEqual(states.RUNNING, task1_action_ex.state)
+
+        self.assertRaises(
+            exc.InvalidStateTransitionException,
+            self.engine.on_action_update,
+            task1_action_ex.id,
+            states.PAUSED
+        )
 
     def test_on_action_complete(self):
         wf_input = {'param1': 'Hey', 'param2': 'Hi'}
@@ -300,6 +430,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             wf_input,
             task_name='task2'
         )
@@ -337,7 +468,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Finish action of 'task1'.
         task1_action_ex = self.engine.on_action_complete(
             task1_action_ex.id,
-            wf_utils.Result(data='Hey')
+            ml_actions.Result(data='Hey')
         )
 
         self.assertIsInstance(task1_action_ex, models.ActionExecution)
@@ -379,7 +510,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Finish 'task2'.
         task2_action_ex = self.engine.on_action_complete(
             task2_action_ex.id,
-            wf_utils.Result(data='Hi')
+            ml_actions.Result(data='Hi')
         )
 
         with db_api.transaction():
@@ -413,6 +544,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             {
                 'param1': 'Hey',
                 'param2': 'Hi'
@@ -435,6 +567,7 @@ class DefaultEngineTest(base.DbTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             {
                 'param1': 'Hey',
                 'param2': 'Hi'
@@ -456,6 +589,7 @@ class DefaultEngineTest(base.DbTestCase):
     def test_stop_workflow_bad_status(self):
         wf_ex = self.engine.start_workflow(
             'wb.wf',
+            '',
             {
                 'param1': 'Hey',
                 'param2': 'Hi'
@@ -506,4 +640,4 @@ class DefaultEngineWithTransportTest(eng_test_base.EngineTestCase):
             'some_description'
         )
 
-        self.assertIn('KeyError: wrong key', exception.message)
+        self.assertIn('KeyError: wrong key', str(exception))

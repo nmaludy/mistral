@@ -16,7 +16,6 @@ import copy
 import mock
 from oslo_config import cfg
 
-from mistral.actions import base as action_base
 from mistral.actions import std_actions
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
@@ -27,7 +26,7 @@ from mistral.tests.unit.engine import base
 from mistral import utils
 from mistral.workflow import data_flow
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as actions_base
 
 # TODO(nmakhotkin) Need to write more tests.
 
@@ -152,11 +151,11 @@ WF_INPUT_ONE_ITEM = {
 }
 
 
-class RandomSleepEchoAction(action_base.Action):
+class RandomSleepEchoAction(actions_base.Action):
     def __init__(self, output):
         self.output = output
 
-    def run(self):
+    def run(self, context):
         utils.random_sleep(1)
 
         return self.output
@@ -186,7 +185,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WB)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT)
+        wf_ex = self.engine.start_workflow('wb.wf', '', WF_INPUT)
 
         self.await_workflow_success(wf_ex.id)
 
@@ -242,7 +241,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -268,7 +267,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -316,7 +315,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.wf', {})
+        wf_ex = self.engine.start_workflow('wb1.wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -333,7 +332,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_input.update({'greeting': 'Hello'})
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf', wf_input)
+        wf_ex = self.engine.start_workflow('wb.wf', '', wf_input)
 
         self.await_workflow_success(wf_ex.id)
 
@@ -361,7 +360,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_input = {'arrayI': ['a', 'b', 'c'], 'arrayJ': [1, 2, 3]}
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf', wf_input)
+        wf_ex = self.engine.start_workflow('wb.wf', '', wf_input)
 
         self.await_workflow_success(wf_ex.id)
 
@@ -390,7 +389,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WB_ACTION_CONTEXT)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT_URLS)
+        wf_ex = self.engine.start_workflow('wb.wf', '', WF_INPUT_URLS)
 
         with db_api.transaction():
             wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -399,11 +398,17 @@ class WithItemsEngineTest(base.EngineTestCase):
 
             act_exs = task_ex.executions
 
-        self.engine.on_action_complete(act_exs[0].id, wf_utils.Result("Ivan"))
-        self.engine.on_action_complete(act_exs[1].id, wf_utils.Result("John"))
+        self.engine.on_action_complete(
+            act_exs[0].id,
+            actions_base.Result("Ivan")
+        )
+        self.engine.on_action_complete(
+            act_exs[1].id,
+            actions_base.Result("John")
+        )
         self.engine.on_action_complete(
             act_exs[2].id,
-            wf_utils.Result("Mistral")
+            actions_base.Result("Mistral")
         )
 
         self.await_workflow_success(wf_ex.id)
@@ -449,7 +454,7 @@ class WithItemsEngineTest(base.EngineTestCase):
 
         # Start workflow.
         wf_input = {'names_info': []}
-        wf_ex = self.engine.start_workflow('wb1.with_items', wf_input)
+        wf_ex = self.engine.start_workflow('wb1.with_items', '', wf_input)
 
         self.await_workflow_success(wf_ex.id)
 
@@ -485,7 +490,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', {})
+        wf_ex = self.engine.start_workflow('wb1.with_items', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -529,7 +534,7 @@ class WithItemsEngineTest(base.EngineTestCase):
             wb_service.create_workbook_v2, wb_text
         )
 
-        self.assertIn("Invalid array in 'with-items'", exception.message)
+        self.assertIn("Invalid array in 'with-items'", str(exception))
 
     def test_with_items_results_order(self):
         wb_text = """---
@@ -554,7 +559,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', {})
+        wf_ex = self.engine.start_workflow('wb1.with_items', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -579,7 +584,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WB)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf', WF_INPUT_ONE_ITEM)
+        wf_ex = self.engine.start_workflow('wb.wf', '', WF_INPUT_ONE_ITEM)
 
         self.await_workflow_success(wf_ex.id)
 
@@ -622,7 +627,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_1)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         with db_api.transaction():
             wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -636,7 +641,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 1st iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("John")
+            actions_base.Result("John")
         )
 
         # Wait till the delayed on_action_complete is processed.
@@ -652,7 +657,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 2nd iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("Ivan")
+            actions_base.Result("Ivan")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) == 1)
@@ -666,7 +671,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 3rd iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("Mistral")
+            actions_base.Result("Mistral")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
@@ -715,7 +720,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {'concurrency': 2})
+        wf_ex = self.engine.start_workflow('wf', '', {'concurrency': 2})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -757,7 +762,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_yaql)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {'concurrency': '2'})
+        wf_ex = self.engine.start_workflow('wf', '', {'concurrency': '2'})
 
         self.assertIn(
             'Invalid data type in ConcurrencyPolicy',
@@ -785,7 +790,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_2)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         with db_api.transaction():
             wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -800,7 +805,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 1st iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("John")
+            actions_base.Result("John")
         )
 
         # Wait till the delayed on_action_complete is processed.
@@ -818,7 +823,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 2nd iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("Ivan")
+            actions_base.Result("Ivan")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) == 1)
@@ -834,7 +839,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 3rd iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("Mistral")
+            actions_base.Result("Mistral")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) == 1)
@@ -849,7 +854,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 4th iteration complete.
         self.engine.on_action_complete(
             incomplete_action.id,
-            wf_utils.Result("Hello")
+            actions_base.Result("Hello")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
@@ -897,7 +902,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_2_fail)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('concurrency_test_fail', {})
+        wf_ex = self.engine.start_workflow('concurrency_test_fail', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -938,7 +943,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_with_concurrency_3)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('concurrency_test', {})
+        wf_ex = self.engine.start_workflow('concurrency_test', '', {})
 
         with db_api.transaction():
             wf_ex = db_api.get_workflow_execution(wf_ex.id)
@@ -952,7 +957,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 1st iteration complete.
         self.engine.on_action_complete(
             self._get_incomplete_action(task_ex).id,
-            wf_utils.Result("John")
+            actions_base.Result("John")
         )
 
         # Wait till the delayed on_action_complete is processed.
@@ -969,7 +974,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 2nd iteration complete.
         self.engine.on_action_complete(
             incomplete_action.id,
-            wf_utils.Result("Ivan")
+            actions_base.Result("Ivan")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) == 1)
@@ -984,7 +989,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         # 3rd iteration complete.
         self.engine.on_action_complete(
             incomplete_action.id,
-            wf_utils.Result("Mistral")
+            actions_base.Result("Mistral")
         )
 
         self._await(lambda: len(db_api.get_delayed_calls()) in (0, 1))
@@ -1032,7 +1037,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_definition)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('concurrency_test', {})
+        wf_ex = self.engine.start_workflow('concurrency_test', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1074,7 +1079,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('with_items_retry', {})
+        wf_ex = self.engine.start_workflow('with_items_retry', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1119,7 +1124,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1154,7 +1159,12 @@ class WithItemsEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {}, env={'name': 'Mistral'})
+        wf_ex = self.engine.start_workflow(
+            'wf',
+            '',
+            {},
+            env={'name': 'Mistral'}
+        )
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1204,7 +1214,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb1.with_items', {})
+        wf_ex = self.engine.start_workflow('wb1.with_items', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1274,7 +1284,7 @@ class WithItemsEngineTest(base.EngineTestCase):
 
         # Start workflow.
         names = ["Peter", "Susan", "Edmund", "Lucy", "Aslan", "Caspian"]
-        wf_ex = self.engine.start_workflow('wb1.main', {'names': names})
+        wf_ex = self.engine.start_workflow('wb1.main', '', {'names': names})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -1344,7 +1354,7 @@ class WithItemsEngineTest(base.EngineTestCase):
         wb_service.create_workbook_v2(wb_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('test.with_items_default_bug', {})
+        wf_ex = self.engine.start_workflow('test.with_items_default_bug')
 
         self.await_workflow_success(wf_ex.id)
 

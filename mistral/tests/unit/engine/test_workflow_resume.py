@@ -17,12 +17,12 @@ from oslo_config import cfg
 
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
 from mistral.services import workbooks as wb_service
 from mistral.tests.unit.engine import base
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import data_flow
 from mistral.workflow import states
-from mistral.workflow import utils
+from mistral_lib import actions as ml_actions
 
 
 # Use the set_default method to set value otherwise in certain test cases
@@ -195,7 +195,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         wb_service.create_workbook_v2(RESUME_WORKBOOK)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf1', {})
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {})
 
         self.await_workflow_paused(wf_ex.id)
 
@@ -230,6 +230,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         # Start workflow.
         wf_ex = self.engine.start_workflow(
             'resume_reverse.wf',
+            '',
             {},
             task_name='task2'
         )
@@ -265,7 +266,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WORKBOOK_TWO_BRANCHES)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf1', {})
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {})
 
         self.await_workflow_paused(wf_ex.id)
 
@@ -295,7 +296,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WORKBOOK_TWO_START_TASKS)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf1', {})
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {})
 
         self.await_workflow_paused(wf_ex.id)
 
@@ -332,7 +333,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         wb_service.create_workbook_v2(WORKBOOK_DIFFERENT_TASK_STATES)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf1', {})
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {})
 
         self.await_workflow_paused(wf_ex.id)
 
@@ -365,7 +366,7 @@ class WorkflowResumeTest(base.EngineTestCase):
             task_execution_id=task2_ex.id
         )[0]
 
-        self.engine.on_action_complete(task2_action_ex.id, utils.Result())
+        self.engine.on_action_complete(task2_action_ex.id, ml_actions.Result())
 
         self.await_workflow_success(wf_ex.id)
 
@@ -381,7 +382,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         # Start and pause workflow.
         wb_service.create_workbook_v2(WORKBOOK_DIFFERENT_TASK_STATES)
 
-        wf_ex = self.engine.start_workflow('wb.wf1', {})
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {})
 
         self.await_workflow_paused(wf_ex.id)
 
@@ -413,7 +414,7 @@ class WorkflowResumeTest(base.EngineTestCase):
         }
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wb.wf1', {}, env=env)
+        wf_ex = self.engine.start_workflow('wb.wf1', '', {}, env=env)
 
         self.await_workflow_paused(wf_ex.id)
 

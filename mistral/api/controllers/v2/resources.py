@@ -69,6 +69,7 @@ class Workflow(resource.Resource):
 
     id = wtypes.text
     name = wtypes.text
+    namespace = wtypes.text
     input = wtypes.text
 
     definition = wtypes.text
@@ -92,19 +93,16 @@ class Workflow(resource.Resource):
                    scope='private',
                    project_id='a7eb669e9819420ea4bd1453e672c0a7',
                    created_at='1970-01-01T00:00:00.000000',
-                   updated_at='1970-01-01T00:00:00.000000')
+                   updated_at='1970-01-01T00:00:00.000000',
+                   namespace='')
 
     @classmethod
-    def from_dict(cls, d):
-        e = cls()
+    def _set_input(cls, obj, wf_spec):
         input_list = []
 
-        for key, val in d.items():
-            if hasattr(e, key):
-                setattr(e, key, val)
+        if wf_spec:
+            input = wf_spec.get('input', [])
 
-        if 'spec' in d:
-            input = d.get('spec', {}).get('input', [])
             for param in input:
                 if isinstance(param, dict):
                     for k, v in param.items():
@@ -112,9 +110,21 @@ class Workflow(resource.Resource):
                 else:
                     input_list.append(param)
 
-            setattr(e, 'input', ", ".join(input_list) if input_list else '')
+            setattr(obj, 'input', ", ".join(input_list) if input_list else '')
 
-        return e
+        return obj
+
+    @classmethod
+    def from_dict(cls, d):
+        obj = super(Workflow, cls).from_dict(d)
+
+        return cls._set_input(obj, d.get('spec'))
+
+    @classmethod
+    def from_db_model(cls, db_model):
+        obj = super(Workflow, cls).from_db_model(db_model)
+
+        return cls._set_input(obj, db_model.spec)
 
 
 class Workflows(resource.ResourceList):
@@ -206,6 +216,14 @@ class Execution(resource.Resource):
     workflow_name = wtypes.text
     "reference to workflow definition"
 
+    workflow_namespace = wtypes.text
+    """reference to workflow namespace. The workflow namespace is also saved
+     under params and passed to all sub-workflow executions. When looking for
+     the next sub-workflow to run, The correct workflow will be found by
+     name and namespace, where the namespace can be the workflow namespace or
+     the default namespace. Workflows in the same namespace as the top workflow
+     will be given a higher priority."""
+
     workflow_id = wtypes.text
     "reference to workflow ID"
 
@@ -213,8 +231,8 @@ class Execution(resource.Resource):
     "description of workflow execution."
 
     params = types.jsontype
-    ("params define workflow type specific parameters. For example, reverse "
-     "workflow takes one parameter 'task_name' that defines a target task.")
+    """params define workflow type specific parameters. For example, reverse
+     workflow takes one parameter 'task_name' that defines a target task."""
 
     task_execution_id = wtypes.text
     "reference to the parent task execution"
@@ -238,6 +256,7 @@ class Execution(resource.Resource):
     def sample(cls):
         return cls(id='123e4567-e89b-12d3-a456-426655440000',
                    workflow_name='flow',
+                   workflow_namespace='some_namespace',
                    workflow_id='123e4567-e89b-12d3-a456-426655441111',
                    description='this is the first execution.',
                    state='SUCCESS',
@@ -279,15 +298,18 @@ class Task(resource.Resource):
     type = wtypes.text
 
     workflow_name = wtypes.text
+    workflow_namespace = wtypes.text
     workflow_id = wtypes.text
     workflow_execution_id = wtypes.text
 
     state = wtypes.text
-    ("state can take one of the following values: "
-     "IDLE, RUNNING, SUCCESS, ERROR, DELAYED")
+    """state can take one of the following values:
+     IDLE, RUNNING, SUCCESS, ERROR, DELAYED"""
 
     state_info = wtypes.text
     "an optional state information string"
+
+    runtime_context = types.jsontype
 
     result = wtypes.text
     published = types.jsontype
@@ -310,6 +332,14 @@ class Task(resource.Resource):
             workflow_execution_id='123e4567-e89b-12d3-a456-426655440000',
             name='task',
             state=states.SUCCESS,
+            runtime_context={
+                'triggered_by': [
+                    {
+                        'task_id': '123-123-123',
+                        'event': 'on-success'
+                    }
+                ]
+            },
             result='task result',
             published={'key': 'value'},
             processed=True,
@@ -340,6 +370,7 @@ class ActionExecution(resource.Resource):
     id = wtypes.text
 
     workflow_name = wtypes.text
+    workflow_namespace = wtypes.text
     task_name = wtypes.text
     task_execution_id = wtypes.text
 

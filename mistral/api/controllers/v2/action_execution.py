@@ -24,15 +24,23 @@ from mistral.api.controllers.v2 import resources
 from mistral.api.controllers.v2 import types
 from mistral import context
 from mistral.db.v2 import api as db_api
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import clients as rpc
 from mistral.utils import filter_utils
 from mistral.utils import rest_utils
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
 
 
 LOG = logging.getLogger(__name__)
+
+SUPPORTED_TRANSITION_STATES = [
+    states.SUCCESS,
+    states.ERROR,
+    states.CANCELLED,
+    states.PAUSED,
+    states.RUNNING
+]
 
 
 def _load_deferred_output_field(action_ex):
@@ -56,7 +64,7 @@ def _get_action_execution_resource_for_list(action_ex):
 
     # TODO(nmakhotkin): Get rid of using dicts for constructing resources.
     # TODO(nmakhotkin): Use db_model for this instead.
-    res = resources.ActionExecution.from_dict(action_ex.to_dict())
+    res = resources.ActionExecution.from_db_model(action_ex)
 
     task_name = (action_ex.task_execution.name
                  if action_ex.task_execution else None)
@@ -116,7 +124,10 @@ class ActionExecutionsController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.ActionExecution, wtypes.text)
     def get(self, id):
-        """Return the specified action_execution."""
+        """Return the specified action_execution.
+
+        :param id: UUID of action execution to retrieve
+        """
         acl.enforce('action_executions:get', context.ctx())
 
         LOG.info("Fetch action_execution [id=%s]", id)
@@ -127,10 +138,16 @@ class ActionExecutionsController(rest.RestController):
     @wsme_pecan.wsexpose(resources.ActionExecution,
                          body=resources.ActionExecution, status_code=201)
     def post(self, action_ex):
-        """Create new action_execution."""
+        """Create new action_execution.
+
+        :param action_ex: Action to execute
+        """
         acl.enforce('action_executions:create', context.ctx())
 
-        LOG.info("Create action_execution [action_execution=%s]", action_ex)
+        LOG.info(
+            "Create action_execution [action_execution=%s]",
+            action_ex
+        )
 
         name = action_ex.name
         description = action_ex.description or None
@@ -142,14 +159,14 @@ class ActionExecutionsController(rest.RestController):
                 "Please provide at least action name to run action."
             )
 
-        action_ex = rpc.get_engine_client().start_action(
+        values = rpc.get_engine_client().start_action(
             name,
             action_input,
             description=description,
             **params
         )
 
-        return resources.ActionExecution.from_dict(action_ex)
+        return resources.ActionExecution.from_dict(values)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(
@@ -158,33 +175,44 @@ class ActionExecutionsController(rest.RestController):
         body=resources.ActionExecution
     )
     def put(self, id, action_ex):
-        """Update the specified action_execution."""
+        """Update the specified action_execution.
+
+        :param id: UUID of action execution to update
+        :param action_ex: Action execution for update
+        """
         acl.enforce('action_executions:update', context.ctx())
 
         LOG.info(
-            "Update action_execution [id=%s, action_execution=%s]"
-            % (id, action_ex)
+            "Update action_execution [id=%s, action_execution=%s]",
+            id,
+            action_ex
         )
 
-        output = action_ex.output
-
-        if action_ex.state == states.SUCCESS:
-            result = wf_utils.Result(data=output)
-        elif action_ex.state == states.ERROR:
-            if not output:
-                output = 'Unknown error'
-            result = wf_utils.Result(error=output)
-        elif action_ex.state == states.CANCELLED:
-            result = wf_utils.Result(cancel=True)
-        else:
+        if action_ex.state not in SUPPORTED_TRANSITION_STATES:
             raise exc.InvalidResultException(
                 "Error. Expected one of %s, actual: %s" % (
-                    [states.SUCCESS, states.ERROR, states.CANCELLED],
+                    SUPPORTED_TRANSITION_STATES,
                     action_ex.state
                 )
             )
 
-        values = rpc.get_engine_client().on_action_complete(id, result)
+        if states.is_completed(action_ex.state):
+            output = action_ex.output
+
+            if action_ex.state == states.SUCCESS:
+                result = ml_actions.Result(data=output)
+            elif action_ex.state == states.ERROR:
+                if not output:
+                    output = 'Unknown error'
+                result = ml_actions.Result(error=output)
+            elif action_ex.state == states.CANCELLED:
+                result = ml_actions.Result(cancel=True)
+
+            values = rpc.get_engine_client().on_action_complete(id, result)
+
+        if action_ex.state in [states.PAUSED, states.RUNNING]:
+            state = action_ex.state
+            values = rpc.get_engine_client().on_action_update(id, state)
 
         return resources.ActionExecution.from_dict(values)
 
@@ -264,9 +292,15 @@ class ActionExecutionsController(rest.RestController):
             description=description
         )
 
-        LOG.info("Fetch action_executions. marker=%s, limit=%s, "
-                 "sort_keys=%s, sort_dirs=%s, filters=%s",
-                 marker, limit, sort_keys, sort_dirs, filters)
+        LOG.info(
+            "Fetch action_executions. marker=%s, limit=%s, "
+            "sort_keys=%s, sort_dirs=%s, filters=%s",
+            marker,
+            limit,
+            sort_keys,
+            sort_dirs,
+            filters
+        )
 
         return _get_action_executions(
             marker=marker,
@@ -281,7 +315,10 @@ class ActionExecutionsController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
     def delete(self, id):
-        """Delete the specified action_execution."""
+        """Delete the specified action_execution.
+
+        :param id: UUID of action execution to delete
+        """
         acl.enforce('action_executions:delete', context.ctx())
 
         LOG.info("Delete action_execution [id=%s]", id)
@@ -384,9 +421,15 @@ class TasksActionExecutionController(rest.RestController):
             description=description
         )
 
-        LOG.info("Fetch action_executions. marker=%s, limit=%s, "
-                 "sort_keys=%s, sort_dirs=%s, filters=%s",
-                 marker, limit, sort_keys, sort_dirs, filters)
+        LOG.info(
+            "Fetch action_executions. marker=%s, limit=%s, "
+            "sort_keys=%s, sort_dirs=%s, filters=%s",
+            marker,
+            limit,
+            sort_keys,
+            sort_dirs,
+            filters
+        )
 
         return _get_action_executions(
             marker=marker,
@@ -401,7 +444,11 @@ class TasksActionExecutionController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.ActionExecution, wtypes.text, wtypes.text)
     def get(self, task_execution_id, action_ex_id):
-        """Return the specified action_execution."""
+        """Return the specified action_execution.
+
+        :param task_execution_id: Task execution UUID
+        :param action_ex_id: Action execution UUID
+        """
         acl.enforce('action_executions:get', context.ctx())
 
         LOG.info("Fetch action_execution [id=%s]", action_ex_id)

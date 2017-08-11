@@ -65,11 +65,11 @@ def register_action_class(name, action_class_str, attributes,
     }
 
     try:
-        LOG.debug("Registering action in DB: %s" % name)
+        LOG.debug("Registering action in DB: %s", name)
 
         db_api.create_action_definition(values)
     except exc.DBDuplicateEntryError:
-        LOG.debug("Action %s already exists in DB." % name)
+        LOG.debug("Action %s already exists in DB.", name)
 
 
 def _clear_system_action_db():
@@ -187,9 +187,7 @@ def get_action_context(task_ex, action_ex_id, save=True):
 
 
 def get_empty_action_context():
-    return {
-        _ACTION_CTX_PARAM: {}
-    }
+    return {_ACTION_CTX_PARAM: {}}
 
 
 def _has_argument(action, attributes, argument_name):

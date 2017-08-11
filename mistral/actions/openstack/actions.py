@@ -22,7 +22,6 @@ from keystoneclient.auth import identity
 from keystoneclient import httpclient
 
 from mistral.actions.openstack import base
-from mistral import context
 from mistral.utils import inspect_utils
 from mistral.utils.openstack import keystone as keystone_utils
 
@@ -43,9 +42,8 @@ def _try_import(module_name):
     try:
         return importutils.try_import(module_name)
     except Exception as e:
-        msg = 'Unable to load module "%s". %s' % (module_name, e.message)
+        msg = 'Unable to load module "%s". %s' % (module_name, str(e))
         LOG.error(msg)
-        print('ERROR [%s] %s' % (__name__, msg))
         return None
 
 
@@ -55,6 +53,7 @@ ceilometerclient = _try_import('ceilometerclient.v2.client')
 cinderclient = _try_import('cinderclient.v2.client')
 designateclient = _try_import('designateclient.v1')
 glanceclient = _try_import('glanceclient.v2.client')
+glareclient = _try_import('glareclient.v1.client')
 gnocchiclient = _try_import('gnocchiclient.v1.client')
 heatclient = _try_import('heatclient.v1.client')
 ironic_inspector_client = _try_import('ironic_inspector_client.v1')
@@ -73,57 +72,39 @@ zaqarclient = _try_import('zaqarclient.queues.v2.client')
 
 
 class NovaAction(base.OpenStackAction):
-    def _create_client(self):
-        ctx = context.ctx()
+    _service_type = 'compute'
 
-        LOG.debug("Nova action security context: %s" % ctx)
+    @classmethod
+    def _get_client_class(cls):
+        return novaclient.Client
 
-        keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
-        nova_endpoint = keystone_utils.get_endpoint_for_project('nova')
+    def _create_client(self, context):
+        LOG.debug("Nova action security context: %s", context)
 
-        client = novaclient.Client(
-            2,
-            username=None,
-            api_key=None,
-            endpoint_type=CONF.os_actions_endpoint_type,
-            service_type='compute',
-            auth_token=ctx.auth_token,
-            tenant_id=ctx.project_id,
-            region_name=keystone_endpoint.region,
-            auth_url=keystone_endpoint.url,
-            insecure=ctx.insecure
-        )
-
-        client.client.management_url = keystone_utils.format_url(
-            nova_endpoint.url,
-            {'tenant_id': ctx.project_id}
-        )
-
-        return client
+        return novaclient.Client(2, **self.get_session_and_auth(context))
 
     @classmethod
     def _get_fake_client(cls):
-        return novaclient.Client(2)
+        return cls._get_client_class()(2)
 
 
 class GlanceAction(base.OpenStackAction):
+    _service_type = 'image'
 
     @classmethod
     def _get_client_class(cls):
         return glanceclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Glance action security context: %s" % ctx)
+        LOG.debug("Glance action security context: %s", context)
 
-        glance_endpoint = keystone_utils.get_endpoint_for_project('glance')
+        glance_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             glance_endpoint.url,
             region_name=glance_endpoint.region,
-            token=ctx.auth_token,
-            insecure=ctx.insecure
+            **self.get_session_and_auth(context)
         )
 
     @classmethod
@@ -133,34 +114,24 @@ class GlanceAction(base.OpenStackAction):
 
 class KeystoneAction(base.OpenStackAction):
 
+    _service_type = 'identity'
+
     @classmethod
     def _get_client_class(cls):
         return keystoneclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Keystone action security context: %s" % ctx)
+        LOG.debug("Keystone action security context: %s", context)
 
-        # TODO(akovi) cacert is deprecated in favor of session
-        # TODO(akovi) this piece of code should be refactored
-        # TODO(akovi) to follow the new guide lines
-        kwargs = {
-            'token': ctx.auth_token,
-            'auth_url': ctx.auth_uri,
-            'project_id': ctx.project_id,
-            'cacert': ctx.auth_cacert,
-            'insecure': ctx.insecure
-        }
+        kwargs = self.get_session_and_auth(context)
 
-        # In case of trust-scoped token explicitly pass endpoint parameter.
-        if (ctx.is_trust_scoped
-                or keystone_utils.is_token_trust_scoped(ctx.auth_token)):
-            kwargs['endpoint'] = ctx.auth_uri
+        # NOTE(akovi): the endpoint in the token messes up
+        # keystone. The auth parameter should not be provided for
+        # these operations.
+        kwargs.pop('auth')
 
         client = self._get_client_class()(**kwargs)
-
-        client.management_url = ctx.auth_uri
 
         return client
 
@@ -179,31 +150,29 @@ class KeystoneAction(base.OpenStackAction):
 
 
 class CeilometerAction(base.OpenStackAction):
+    _service_type = 'metering'
 
     @classmethod
     def _get_client_class(cls):
         return ceilometerclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Ceilometer action security context: %s" % ctx)
+        LOG.debug("Ceilometer action security context: %s", context)
 
-        ceilometer_endpoint = keystone_utils.get_endpoint_for_project(
-            'ceilometer'
-        )
+        ceilometer_endpoint = self.get_service_endpoint()
 
         endpoint_url = keystone_utils.format_url(
             ceilometer_endpoint.url,
-            {'tenant_id': ctx.project_id}
+            {'tenant_id': context.project_id}
         )
 
         return self._get_client_class()(
             endpoint_url,
             region_name=ceilometer_endpoint.region,
-            token=ctx.auth_token,
-            username=ctx.user_name,
-            insecure=ctx.insecure
+            token=context.auth_token,
+            username=context.user_name,
+            insecure=context.insecure
         )
 
     @classmethod
@@ -212,32 +181,30 @@ class CeilometerAction(base.OpenStackAction):
 
 
 class HeatAction(base.OpenStackAction):
+    _service_type = 'orchestration'
 
     @classmethod
     def _get_client_class(cls):
         return heatclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Heat action security context: %s" % ctx)
+        LOG.debug("Heat action security context: %s", context)
 
-        heat_endpoint = keystone_utils.get_endpoint_for_project('heat')
+        heat_endpoint = self.get_service_endpoint()
 
         endpoint_url = keystone_utils.format_url(
             heat_endpoint.url,
             {
-                'tenant_id': ctx.project_id,
-                'project_id': ctx.project_id
+                'tenant_id': context.project_id,
+                'project_id': context.project_id
             }
         )
 
         return self._get_client_class()(
             endpoint_url,
             region_name=heat_endpoint.region,
-            token=ctx.auth_token,
-            username=ctx.user_name,
-            insecure=ctx.insecure
+            **self.get_session_and_auth(context)
         )
 
     @classmethod
@@ -246,60 +213,58 @@ class HeatAction(base.OpenStackAction):
 
 
 class NeutronAction(base.OpenStackAction):
+    _service_type = 'network'
 
     @classmethod
     def _get_client_class(cls):
         return neutronclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Neutron action security context: %s" % ctx)
+        LOG.debug("Neutron action security context: %s", context)
 
-        neutron_endpoint = keystone_utils.get_endpoint_for_project('neutron')
+        neutron_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             endpoint_url=neutron_endpoint.url,
             region_name=neutron_endpoint.region,
-            token=ctx.auth_token,
-            auth_url=ctx.auth_uri,
-            insecure=ctx.insecure
+            token=context.auth_token,
+            auth_url=context.auth_uri,
+            insecure=context.insecure
         )
 
 
 class CinderAction(base.OpenStackAction):
+    _service_type = 'volumev2'
 
     @classmethod
     def _get_client_class(cls):
         return cinderclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Cinder action security context: %s" % ctx)
+        LOG.debug("Cinder action security context: %s", context)
 
-        cinder_endpoint = keystone_utils.get_endpoint_for_project(
-            service_type='volumev2'
-        )
+        cinder_endpoint = self.get_service_endpoint()
 
         cinder_url = keystone_utils.format_url(
             cinder_endpoint.url,
             {
-                'tenant_id': ctx.project_id,
-                'project_id': ctx.project_id
+                'tenant_id': context.project_id,
+                'project_id': context.project_id
             }
         )
 
         client = self._get_client_class()(
-            ctx.user_name,
-            ctx.auth_token,
-            project_id=ctx.project_id,
+            context.user_name,
+            context.auth_token,
+            project_id=context.project_id,
             auth_url=cinder_url,
             region_name=cinder_endpoint.region,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
-        client.client.auth_token = ctx.auth_token
+        client.client.auth_token = context.auth_token
         client.client.management_url = cinder_url
 
         return client
@@ -310,36 +275,20 @@ class CinderAction(base.OpenStackAction):
 
 
 class MistralAction(base.OpenStackAction):
+    _service_type = 'workflowv2'
 
     @classmethod
     def _get_client_class(cls):
         return mistralclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Mistral action security context: %s" % ctx)
+        LOG.debug("Mistral action security context: %s", context)
 
-        # Check for trust scope token. This may occur if the action is
-        # called from a workflow triggered by a Mistral cron trigger.
-        if ctx.is_trust_scoped:
-            auth_url = None
-            mistral_endpoint = keystone_utils.get_endpoint_for_project(
-                'mistral'
-            )
-            mistral_url = mistral_endpoint.url
-        else:
-            keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
-            auth_url = keystone_endpoint.url
-            mistral_url = None
-
+        session_and_auth = self.get_session_and_auth(context)
         return self._get_client_class()(
-            mistral_url=mistral_url,
-            auth_token=ctx.auth_token,
-            project_id=ctx.project_id,
-            user_id=ctx.user_id,
-            auth_url=auth_url,
-            insecure=ctx.insecure
+            mistral_url=session_and_auth['auth'].endpoint,
+            **session_and_auth
         )
 
     @classmethod
@@ -348,35 +297,33 @@ class MistralAction(base.OpenStackAction):
 
 
 class TroveAction(base.OpenStackAction):
+    _service_type = 'database'
 
     @classmethod
     def _get_client_class(cls):
         return troveclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Trove action security context: %s" % ctx)
+        LOG.debug("Trove action security context: %s", context)
 
-        trove_endpoint = keystone_utils.get_endpoint_for_project(
-            service_type='database'
-        )
+        trove_endpoint = self.get_service_endpoint()
 
         trove_url = keystone_utils.format_url(
             trove_endpoint.url,
-            {'tenant_id': ctx.project_id}
+            {'tenant_id': context.project_id}
         )
 
         client = self._get_client_class()(
-            ctx.user_name,
-            ctx.auth_token,
-            project_id=ctx.project_id,
+            context.user_name,
+            context.auth_token,
+            project_id=context.project_id,
             auth_url=trove_url,
             region_name=trove_endpoint.region,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
-        client.client.auth_token = ctx.auth_token
+        client.client.auth_token = context.auth_token
         client.client.management_url = trove_url
 
         return client
@@ -387,24 +334,24 @@ class TroveAction(base.OpenStackAction):
 
 
 class IronicAction(base.OpenStackAction):
+    _service_name = 'ironic'
 
     @classmethod
     def _get_client_class(cls):
         return ironicclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Ironic action security context: %s" % ctx)
+        LOG.debug("Ironic action security context: %s", context)
 
-        ironic_endpoint = keystone_utils.get_endpoint_for_project('ironic')
+        ironic_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             ironic_endpoint.url,
-            token=ctx.auth_token,
+            token=context.auth_token,
             region_name=ironic_endpoint.region,
             os_ironic_api_version=IRONIC_API_VERSION,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
     @classmethod
@@ -430,7 +377,7 @@ class BaremetalIntrospectionAction(base.OpenStackAction):
             return cls._get_client_class()(session=sess)
         except Exception as e:
             LOG.warning("There was an error trying to create the "
-                        "ironic-inspector client using a session: %s" % str(e))
+                        "ironic-inspector client using a session: %s", str(e))
             # If it's not possible to establish a keystone session, attempt to
             # create a client without it. This should fall back to where the
             # ironic-inspector client tries to get it's own version on the
@@ -440,10 +387,10 @@ class BaremetalIntrospectionAction(base.OpenStackAction):
 
             return cls._get_client_class()()
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Baremetal introspection action security context: %s" % ctx)
+        LOG.debug(
+            "Baremetal introspection action security context: %s", context)
 
         inspector_endpoint = keystone_utils.get_endpoint_for_project(
             service_type='baremetal-introspection'
@@ -452,7 +399,7 @@ class BaremetalIntrospectionAction(base.OpenStackAction):
         return self._get_client_class()(
             api_version=1,
             inspector_url=inspector_endpoint.url,
-            auth_token=ctx.auth_token,
+            auth_token=context.auth_token,
         )
 
 
@@ -462,17 +409,18 @@ class SwiftAction(base.OpenStackAction):
     def _get_client_class(cls):
         return swift_client.Connection
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Swift action security context: %s" % ctx)
+        LOG.debug("Swift action security context: %s", context)
 
         swift_endpoint = keystone_utils.get_endpoint_for_project('swift')
 
         kwargs = {
-            'preauthurl': swift_endpoint.url % {'tenant_id': ctx.project_id},
-            'preauthtoken': ctx.auth_token,
-            'insecure': ctx.insecure
+            'preauthurl': swift_endpoint.url % {
+                'tenant_id': context.project_id
+            },
+            'preauthtoken': context.auth_token,
+            'insecure': context.insecure
         }
 
         return self._get_client_class()(**kwargs)
@@ -484,20 +432,19 @@ class ZaqarAction(base.OpenStackAction):
     def _get_client_class(cls):
         return zaqarclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Zaqar action security context: %s" % ctx)
+        LOG.debug("Zaqar action security context: %s", context)
 
         zaqar_endpoint = keystone_utils.get_endpoint_for_project(
             service_type='messaging')
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
 
         opts = {
-            'os_auth_token': ctx.auth_token,
+            'os_auth_token': context.auth_token,
             'os_auth_url': keystone_endpoint.url,
-            'os_project_id': ctx.project_id,
-            'insecure': ctx.insecure,
+            'os_project_id': context.project_id,
+            'insecure': context.insecure,
         }
         auth_opts = {'backend': 'keystone', 'options': opts}
         conf = {'auth_opts': auth_opts}
@@ -517,15 +464,18 @@ class ZaqarAction(base.OpenStackAction):
         def wrap(*args, **kwargs):
             return method(client, *args, **kwargs)
 
-        args = inspect_utils.get_arg_list_as_str(method)
+        arguments = inspect_utils.get_arg_list_as_str(method)
         # Remove client
-        wrap.__arguments__ = args.split(', ', 1)[1]
+        wrap.__arguments__ = arguments.split(', ', 1)[1]
 
         return wrap
 
     @staticmethod
     def queue_messages(client, queue_name, **params):
         """Gets a list of messages from the queue.
+
+        :param client: the Zaqar client
+        :type client: zaqarclient.queues.client
 
         :param queue_name: Name of the target queue.
         :type queue_name: `six.string_type`
@@ -544,6 +494,9 @@ class ZaqarAction(base.OpenStackAction):
     def queue_post(client, queue_name, messages):
         """Posts one or more messages to a queue.
 
+        :param client: the Zaqar client
+        :type client: zaqarclient.queues.client
+
         :param queue_name: Name of the target queue.
         :type queue_name: `six.string_type`
 
@@ -560,6 +513,9 @@ class ZaqarAction(base.OpenStackAction):
     @staticmethod
     def queue_pop(client, queue_name, count=1):
         """Pop `count` messages from the queue.
+
+        :param client: the Zaqar client
+        :type client: zaqarclient.queues.client
 
         :param queue_name: Name of the target queue.
         :type queue_name: `six.string_type`
@@ -581,26 +537,25 @@ class BarbicanAction(base.OpenStackAction):
     def _get_client_class(cls):
         return barbicanclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Barbican action security context: %s" % ctx)
+        LOG.debug("Barbican action security context: %s", context)
 
         barbican_endpoint = keystone_utils.get_endpoint_for_project('barbican')
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
 
         auth = identity.v2.Token(
             auth_url=keystone_endpoint.url,
-            tenant_name=ctx.user_name,
-            token=ctx.auth_token,
-            tenant_id=ctx.project_id
+            tenant_name=context.user_name,
+            token=context.auth_token,
+            tenant_id=context.project_id
         )
 
         return self._get_client_class()(
-            project_id=ctx.project_id,
+            project_id=context.project_id,
             endpoint=barbican_endpoint.url,
             auth=auth,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
     @classmethod
@@ -621,10 +576,10 @@ class BarbicanAction(base.OpenStackAction):
         def wrap(*args, **kwargs):
             return method(client, *args, **kwargs)
 
-        args = inspect_utils.get_arg_list_as_str(method)
+        arguments = inspect_utils.get_arg_list_as_str(method)
 
         # Remove client.
-        wrap.__arguments__ = args.split(', ', 1)[1]
+        wrap.__arguments__ = arguments.split(', ', 1)[1]
 
         return wrap
 
@@ -637,6 +592,9 @@ class BarbicanAction(base.OpenStackAction):
                       secret_type=None,
                       mode=None, expiration=None):
         """Create and Store a secret in Barbican.
+
+        :param client: the Zaqar client
+        :type client: zaqarclient.queues.client
 
         :param name: A friendly name for the Secret
         :type name: string
@@ -679,35 +637,33 @@ class BarbicanAction(base.OpenStackAction):
 
 
 class DesignateAction(base.OpenStackAction):
+    _service_type = 'dns'
 
     @classmethod
     def _get_client_class(cls):
         return designateclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Designate action security context: %s" % ctx)
+        LOG.debug("Designate action security context: %s", context)
 
-        designate_endpoint = keystone_utils.get_endpoint_for_project(
-            service_type='dns'
-        )
+        designate_endpoint = self.get_service_endpoint()
 
         designate_url = keystone_utils.format_url(
             designate_endpoint.url,
-            {'tenant_id': ctx.project_id}
+            {'tenant_id': context.project_id}
         )
 
         client = self._get_client_class()(
             endpoint=designate_url,
-            tenant_id=ctx.project_id,
-            auth_url=ctx.auth_uri,
+            tenant_id=context.project_id,
+            auth_url=context.auth_uri,
             region_name=designate_endpoint.region,
             service_type='dns',
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
-        client.client.auth_token = ctx.auth_token
+        client.client.auth_token = context.auth_token
         client.client.management_url = designate_url
 
         return client
@@ -723,10 +679,9 @@ class MagnumAction(base.OpenStackAction):
     def _get_client_class(cls):
         return magnumclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Magnum action security context: %s" % ctx)
+        LOG.debug("Magnum action security context: %s", context)
 
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
         auth_url = keystone_endpoint.url
@@ -734,11 +689,11 @@ class MagnumAction(base.OpenStackAction):
 
         return self._get_client_class()(
             magnum_url=magnum_url,
-            auth_token=ctx.auth_token,
-            project_id=ctx.project_id,
-            user_id=ctx.user_id,
+            auth_token=context.auth_token,
+            project_id=context.project_id,
+            user_id=context.user_id,
             auth_url=auth_url,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
     @classmethod
@@ -747,26 +702,26 @@ class MagnumAction(base.OpenStackAction):
 
 
 class MuranoAction(base.OpenStackAction):
+    _service_name = 'murano'
 
     @classmethod
     def _get_client_class(cls):
         return muranoclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Murano action security context: %s" % ctx)
+        LOG.debug("Murano action security context: %s", context)
 
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
-        murano_endpoint = keystone_utils.get_endpoint_for_project('murano')
+        murano_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             endpoint=murano_endpoint.url,
-            token=ctx.auth_token,
-            tenant=ctx.project_id,
+            token=context.auth_token,
+            tenant=context.project_id,
             region_name=murano_endpoint.region,
             auth_url=keystone_endpoint.url,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
     @classmethod
@@ -775,26 +730,26 @@ class MuranoAction(base.OpenStackAction):
 
 
 class TackerAction(base.OpenStackAction):
+    _service_name = 'tacker'
 
     @classmethod
     def _get_client_class(cls):
         return tackerclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Tacker action security context: %s" % ctx)
+        LOG.debug("Tacker action security context: %s", context)
 
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
-        tacker_endpoint = keystone_utils.get_endpoint_for_project('tacker')
+        tacker_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             endpoint_url=tacker_endpoint.url,
-            token=ctx.auth_token,
-            tenant_id=ctx.project_id,
+            token=context.auth_token,
+            tenant_id=context.project_id,
             region_name=tacker_endpoint.region,
             auth_url=keystone_endpoint.url,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
     @classmethod
@@ -803,59 +758,57 @@ class TackerAction(base.OpenStackAction):
 
 
 class SenlinAction(base.OpenStackAction):
+    _service_name = 'senlin'
 
     @classmethod
     def _get_client_class(cls):
         return senlinclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Senlin action security context: %s" % ctx)
+        LOG.debug("Senlin action security context: %s", context)
 
         keystone_endpoint = keystone_utils.get_keystone_endpoint_v2()
-        senlin_endpoint = keystone_utils.get_endpoint_for_project('senlin')
+        senlin_endpoint = self.get_service_endpoint()
 
         return self._get_client_class()(
             endpoint_url=senlin_endpoint.url,
-            token=ctx.auth_token,
-            tenant_id=ctx.project_id,
+            token=context.auth_token,
+            tenant_id=context.project_id,
             region_name=senlin_endpoint.region,
             auth_url=keystone_endpoint.url,
-            insecure=ctx.insecure
+            insecure=context.insecure
         )
 
-        @classmethod
-        def _get_fake_client(cls):
-            return cls._get_client_class()("http://127.0.0.1:8778")
+    @classmethod
+    def _get_fake_client(cls):
+        return cls._get_client_class()("http://127.0.0.1:8778")
 
 
 class AodhAction(base.OpenStackAction):
+    _service_type = 'alarming'
 
     @classmethod
     def _get_client_class(cls):
         return aodhclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Aodh action security context: %s" % ctx)
+        LOG.debug("Aodh action security context: %s", context)
 
-        aodh_endpoint = keystone_utils.get_endpoint_for_project(
-            'aodh'
-        )
+        aodh_endpoint = self.get_service_endpoint()
 
         endpoint_url = keystone_utils.format_url(
             aodh_endpoint.url,
-            {'tenant_id': ctx.project_id}
+            {'tenant_id': context.project_id}
         )
 
         return self._get_client_class()(
             endpoint_url,
             region_name=aodh_endpoint.region,
-            token=ctx.auth_token,
-            username=ctx.user_name,
-            insecure=ctx.insecure
+            token=context.auth_token,
+            username=context.user_name,
+            insecure=context.insecure
         )
 
     @classmethod
@@ -864,32 +817,58 @@ class AodhAction(base.OpenStackAction):
 
 
 class GnocchiAction(base.OpenStackAction):
+    _service_type = 'metric'
 
     @classmethod
     def _get_client_class(cls):
         return gnocchiclient.Client
 
-    def _create_client(self):
-        ctx = context.ctx()
+    def _create_client(self, context):
 
-        LOG.debug("Gnocchi action security context: %s" % ctx)
+        LOG.debug("Gnocchi action security context: %s", context)
 
-        gnocchi_endpoint = keystone_utils.get_endpoint_for_project(
-            'gnocchi'
-        )
+        gnocchi_endpoint = self.get_service_endpoint()
 
         endpoint_url = keystone_utils.format_url(
             gnocchi_endpoint.url,
-            {'tenant_id': ctx.project_id}
+            {'tenant_id': context.project_id}
         )
 
         return self._get_client_class()(
             endpoint_url,
             region_name=gnocchi_endpoint.region,
-            token=ctx.auth_token,
-            username=ctx.user_name
+            token=context.auth_token,
+            username=context.user_name
         )
 
     @classmethod
     def _get_fake_client(cls):
         return cls._get_client_class()()
+
+
+class GlareAction(base.OpenStackAction):
+    _service_name = 'glare'
+
+    @classmethod
+    def _get_client_class(cls):
+        return glareclient.Client
+
+    def _create_client(self, context):
+
+        LOG.debug("Glare action security context: %s", context)
+
+        glare_endpoint = self.get_service_endpoint()
+
+        endpoint_url = keystone_utils.format_url(
+            glare_endpoint.url,
+            {'tenant_id': context.project_id}
+        )
+
+        return self._get_client_class()(
+            endpoint_url,
+            **self.get_session_and_auth(context)
+        )
+
+    @classmethod
+    def _get_fake_client(cls):
+        return cls._get_client_class()("http://127.0.0.1:9494/")

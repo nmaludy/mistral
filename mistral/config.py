@@ -60,7 +60,11 @@ auth_type_opt = cfg.StrOpt(
 )
 
 api_opts = [
-    cfg.StrOpt('host', default='0.0.0.0', help='Mistral API server host'),
+    cfg.HostAddressOpt(
+        'host',
+        default='0.0.0.0',
+        help='Mistral API server host'
+    ),
     cfg.PortOpt('port', default=8989, help='Mistral API server port'),
     cfg.BoolOpt(
         'allow_action_execution_deletion',
@@ -106,14 +110,6 @@ rpc_response_timeout_opt = cfg.IntOpt(
     help=_('Seconds to wait for a response from a call.')
 )
 
-os_endpoint_type = cfg.StrOpt(
-    'os-actions-endpoint-type',
-    default=os.environ.get('OS_ACTIONS_ENDPOINT_TYPE', 'public'),
-    choices=['public', 'admin', 'internal'],
-    help=_('Type of endpoint in identity service catalog to use for'
-           ' communication with OpenStack services.')
-)
-
 expiration_token_duration = cfg.IntOpt(
     'expiration_token_duration',
     default=30,
@@ -147,7 +143,7 @@ pecan_opts = [
 
 engine_opts = [
     cfg.StrOpt('engine', default='default', help='Mistral engine plugin'),
-    cfg.StrOpt(
+    cfg.HostAddressOpt(
         'host',
         default='0.0.0.0',
         help=_('Name of the engine node. This can be an opaque '
@@ -170,6 +166,16 @@ engine_opts = [
 
 executor_opts = [
     cfg.StrOpt(
+        'type',
+        choices=['local', 'remote'],
+        default='remote',
+        help=(
+            'Type of executor. Use local to run the executor within the '
+            'engine server. Use remote if the executor is launched as '
+            'a separate server to run action executions.'
+        )
+    ),
+    cfg.HostAddressOpt(
         'host',
         default='0.0.0.0',
         help=_('Name of the executor node. This can be an opaque '
@@ -189,7 +195,7 @@ executor_opts = [
 ]
 
 event_engine_opts = [
-    cfg.StrOpt(
+    cfg.HostAddressOpt(
         'host',
         default='0.0.0.0',
         help=_('Name of the event engine node. This can be an opaque '
@@ -213,16 +219,35 @@ execution_expiration_policy_opts = [
         'evaluation_interval',
         help=_('How often will the executions be evaluated '
                '(in minutes). For example for value 120 the interval '
-               'will be 2 hours (every 2 hours).')
+               'will be 2 hours (every 2 hours).'
+               'Note that only final state executions will be removed: '
+               '( SUCCESS / ERROR / CANCELLED ).')
     ),
     cfg.IntOpt(
         'older_than',
         help=_('Evaluate from which time remove executions in minutes. '
                'For example when older_than = 60, remove all executions '
                'that finished a 60 minutes ago or more. '
-               'Minimum value is 1. '
-               'Note that only final state execution will remove '
-               '( SUCCESS / ERROR ).')
+               'Minimum value is 1.')
+    ),
+    cfg.IntOpt(
+        'max_finished_executions',
+        default=0,
+        help=_('The maximum number of finished workflow executions'
+               'to be stored. For example when max_finished_executions = 100,'
+               'only the 100 latest finished executions will be preserved.'
+               'This means that even unexpired executions are eligible'
+               'for deletion, to decrease the number of executions in the'
+               'database. The default value is 0. If it is set to 0,'
+               'this constraint won\'t be applied.')
+    ),
+    cfg.IntOpt(
+        'batch_size',
+        default=0,
+        help=_('Size of batch of expired executions to be deleted.'
+               'The default value is 0. If it is set to 0, '
+               'size of batch is total number of expired executions'
+               'that is going to be deleted.')
     )
 ]
 
@@ -252,11 +277,33 @@ keycloak_oidc_opts = [
         'auth_url',
         help=_('Keycloak base url (e.g. https://my.keycloak:8443/auth)')
     ),
-    cfg.StrOpt(
+    cfg.BoolOpt(
         'insecure',
         default=False,
         help=_('If True, SSL/TLS certificate verification is disabled')
     )
+]
+
+openstack_actions_opts = [
+    cfg.StrOpt(
+        'os-actions-endpoint-type',
+        default=os.environ.get('OS_ACTIONS_ENDPOINT_TYPE', 'public'),
+        choices=['public', 'admin', 'internal'],
+        deprecated_group='DEFAULT',
+        help=_('Type of endpoint in identity service catalog to use for'
+               ' communication with OpenStack services.')
+    ),
+    cfg.ListOpt(
+        'modules-support-region',
+        default=['nova', 'glance', 'ceilometer', 'heat', 'neutron', 'cinder',
+                 'trove', 'ironic', 'designate', 'murano', 'tacker', 'senlin',
+                 'aodh', 'gnocchi'],
+        help=_('List of module names that support region in actions.')
+    ),
+    cfg.StrOpt(
+        'default_region',
+        help=_('Default region name for openstack actions supporting region.')
+    ),
 ]
 
 # note: this command line option is used only from sync_db and
@@ -282,9 +329,14 @@ COORDINATION_GROUP = 'coordination'
 EXECUTION_EXPIRATION_POLICY_GROUP = 'execution_expiration_policy'
 PROFILER_GROUP = profiler.list_opts()[0][0]
 KEYCLOAK_OIDC_GROUP = "keycloak_oidc"
+OPENSTACK_ACTIONS_GROUP = 'openstack_actions'
 
 CONF.register_opt(wf_trace_log_name_opt)
 CONF.register_opt(auth_type_opt)
+CONF.register_opt(js_impl_opt)
+CONF.register_opt(rpc_impl_opt)
+CONF.register_opt(rpc_response_timeout_opt)
+CONF.register_opt(expiration_token_duration)
 
 CONF.register_opts(api_opts, group=API_GROUP)
 CONF.register_opts(engine_opts, group=ENGINE_GROUP)
@@ -297,12 +349,8 @@ CONF.register_opts(event_engine_opts, group=EVENT_ENGINE_GROUP)
 CONF.register_opts(pecan_opts, group=PECAN_GROUP)
 CONF.register_opts(coordination_opts, group=COORDINATION_GROUP)
 CONF.register_opts(profiler_opts, group=PROFILER_GROUP)
-CONF.register_opt(js_impl_opt)
-CONF.register_opt(rpc_impl_opt)
-CONF.register_opt(rpc_response_timeout_opt)
 CONF.register_opts(keycloak_oidc_opts, group=KEYCLOAK_OIDC_GROUP)
-CONF.register_opt(os_endpoint_type)
-CONF.register_opt(expiration_token_duration)
+CONF.register_opts(openstack_actions_opts, group=OPENSTACK_ACTIONS_GROUP)
 
 CLI_OPTS = [
     use_debugger_opt,
@@ -312,22 +360,19 @@ CLI_OPTS = [
 default_group_opts = itertools.chain(
     CLI_OPTS,
     [wf_trace_log_name_opt, auth_type_opt, js_impl_opt, rpc_impl_opt,
-     os_endpoint_type, rpc_response_timeout_opt, expiration_token_duration]
+     rpc_response_timeout_opt, expiration_token_duration]
 )
 
 CONF.register_cli_opts(CLI_OPTS)
 
+
 _DEFAULT_LOG_LEVELS = [
-    'amqp=WARN',
-    'sqlalchemy=WARN',
-    'oslo_messaging=INFO',
-    'iso8601=WARN',
     'eventlet.wsgi.server=WARN',
-    'stevedore=INFO',
     'oslo_service.periodic_task=INFO',
     'oslo_service.loopingcall=INFO',
     'mistral.services.periodic=INFO',
-    'kazoo.client=WARN'
+    'kazoo.client=WARN',
+    'oslo_db=WARN'
 ]
 
 
@@ -342,12 +387,15 @@ def list_opts():
         (EXECUTION_EXPIRATION_POLICY_GROUP, execution_expiration_policy_opts),
         (PROFILER_GROUP, profiler_opts),
         (KEYCLOAK_OIDC_GROUP, keycloak_oidc_opts),
+        (OPENSTACK_ACTIONS_GROUP, openstack_actions_opts),
         (None, default_group_opts)
     ]
 
 
 def parse_args(args=None, usage=None, default_config_files=None):
-    log.set_defaults(default_log_levels=_DEFAULT_LOG_LEVELS)
+    default_log_levels = log.get_default_log_levels()
+    default_log_levels.extend(_DEFAULT_LOG_LEVELS)
+    log.set_defaults(default_log_levels=default_log_levels)
 
     log.register_options(CONF)
 

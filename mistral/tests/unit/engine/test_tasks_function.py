@@ -197,9 +197,6 @@ workflows:
 
 
 class TasksFunctionTest(base.EngineTestCase):
-    def setUp(self):
-        super(TasksFunctionTest, self).setUp()
-
     def _assert_published_tasks(self, task, published_key,
                                 expected_tasks_count=None,
                                 expected_tasks_names=None):
@@ -220,11 +217,11 @@ class TasksFunctionTest(base.EngineTestCase):
     def test_tasks_function(self):
         wb_service.create_workbook_v2(WORKBOOK_WITH_EXPRESSIONS)
         # Start helping workflow executions.
-        wf1_ex = self.engine.start_workflow('wb.wf1_top_lvl', {})
-        wf2_ex = self.engine.start_workflow('wb.wf2_top_lvl', {})
-        wf3_ex = self.engine.start_workflow('wb.wf3_top_lvl', {})
-        wf4_ex = self.engine.start_workflow('wb.wf4_top_lvl', {})
-        wf5_ex = self.engine.start_workflow('wb.wf5_top_lvl', {})
+        wf1_ex = self.engine.start_workflow('wb.wf1_top_lvl', '', {})
+        wf2_ex = self.engine.start_workflow('wb.wf2_top_lvl', '', {})
+        wf3_ex = self.engine.start_workflow('wb.wf3_top_lvl', '', {})
+        wf4_ex = self.engine.start_workflow('wb.wf4_top_lvl', '', {})
+        wf5_ex = self.engine.start_workflow('wb.wf5_top_lvl', '', {})
 
         self.await_workflow_success(wf1_ex.id)
         self.await_workflow_success(wf2_ex.id)
@@ -235,6 +232,7 @@ class TasksFunctionTest(base.EngineTestCase):
         # Start test workflow execution
         execution = self.engine.start_workflow(
             'wb.test_tasks_function',
+            '',
             {"wf1_wx_id": wf1_ex.id,
              "wf2_wx_id": wf2_ex.id,
              "wf3_wx_id": wf3_ex.id,

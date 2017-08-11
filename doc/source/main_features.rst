@@ -7,17 +7,18 @@ Task result / Data flow
 
 Mistral supports transferring data from one task to another. In other words,
 if *taskA* produces a value then *taskB* which follows *taskA* can use it.
-In order to use this data Mistral relies on a query language called `YAQL <https://github.com/openstack/yaql>`_. 
+In order to use this data Mistral relies on a query language called
+`YAQL <https://github.com/openstack/yaql>`_.
 YAQL is a powerful yet simple tool that allows the user to filter information,
 transform data and call functions. Find more information about it in the
 `YAQL official documentation <http://yaql.readthedocs.org>`_ . This mechanism
 for transferring data plays a central role in the workflow concept and is
 referred to as Data Flow.
 
-Below is a simple example of how Mistral Data Flow looks like from the DSL
-(workflow language) perspective:
+Below is a simple example of how Mistral Data Flow looks like from the Mistral
+Workflow Language perspective:
 
-.. code-block:: yaml
+.. code-block:: mistral
 
  version: '2.0'
 
@@ -29,7 +30,8 @@ Below is a simple example of how Mistral Data Flow looks like from the DSL
 
    tasks:
      task1:
-       action: std.ssh host=<% $.host %> username=<% $.username %> password=<% $.password %>
+       action: std.ssh host=<% $.host %> username=<% $.username %> \
+               password=<% $.password %>
        input:
          cmd: "cd ~ && ls"
        on-complete: task2
@@ -59,7 +61,7 @@ To enable the task affinity feature, edit the "host" property in the
     host = my_favorite_executor
 
 Then start (restart) the executor. Use the "target" task property to specify
-this executor in Workflow DSL::
+this executor in Mistral Workflow Language::
 
     ... Workflow YAML ...
     task1:
@@ -206,9 +208,10 @@ tasks are complete.
 
 **Discriminator (join: one)**
 
-Discriminator is the special case of Partial Join where the *"join"* property has the value 1.
-In this case instead of 1 it is possible to specify the special string value *"one"*
-which is introduced for symmetry with *"all"*. However, it's up to the user whether to use *"1"* or *"one"*.
+Discriminator is the special case of Partial Join where the *"join"* property
+has the value 1. In this case instead of 1 it is possible to specify the
+special string value *"one"* which is introduced for symmetry with *"all"*.
+However, it's up to the user whether to use *"1"* or *"one"*.
 
 
 Processing collections (with-items)
@@ -233,7 +236,8 @@ YAML example
       tasks:
         create_servers:
           with-items: vm_name in <% $.vm_names %>
-          action: nova.servers_create name=<% $.vm_name %> image=<% $.image_ref %> flavor=<% $.flavor_ref %>
+          action: nova.servers_create name=<% $.vm_name %> \
+                  image=<% $.image_ref %> flavor=<% $.flavor_ref %>
           publish:
             vm_ids: <% $.create_servers.id %>
           on-success:
@@ -288,27 +292,37 @@ can be resolved by setting an expiration policy.
 
 **By default this feature is disabled.**
 
-When enabled, the policy will define the maximum age of an execution in
-minutes since the last updated time. To enable and set a policy, edit the
-Mistral configuration file and specify ``older_than`` and
-``evaluation_interval`` in minutes.
+This policy defines the maximum age of an execution since the last updated time
+(in minutes) and the maximum number of finished executions. Each evaluation will
+satisfy these conditions, so the expired executions (older than specified) will
+be deleted, and the number of execution in finished state (regardless of
+expiration) will be limited to max_finished_executions.
+
+To enable the policy, edit the Mistral configuration file and specify
+``evaluation_interval`` and at least one of the ``older_than``
+or ``evaluation_interval`` options.
 
 .. code-block:: cfg
 
     [execution_expiration_policy]
-    older_than = 10080  # 1 week
     evaluation_interval = 120  # 2 hours
-
-For the expiration policy to be enabled, both of these configuration options
-must be set.
-
-- **older_than**
-
- This defines the maximum age of an execution in minutes since it was last
- updated. It must be greater or equal to ``1``.
+    older_than = 10080  # 1 week
+    max_finished_executions = 500
 
 - **evaluation_interval**
 
- The evaluation interval defines how frequently Mistral will check and expire
- old executions. In the above example it is set to two hours, so every two
- hours Mistral will clean up and look for expired executions.
+ The evaluation interval defines how frequently Mistral will check and ensure
+ the above mentioned constraints. In the above example it is set to two hours,
+ so every two hours Mistral will remove executions older than 1 week, and
+ keep only the 500 latest finished executions.
+
+- **older_than**
+
+ Defines the maximum age of an execution in minutes since it was last
+ updated. It must be greater or equal to ``1``.
+
+- **max_finished_executions**
+
+ Defines the maximum number of finished executions.
+ It must be greater or equal to ``1``.
+

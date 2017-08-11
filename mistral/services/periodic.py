@@ -12,6 +12,8 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+import json
+
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import periodic_task
@@ -19,8 +21,8 @@ from oslo_service import threadgroup
 
 from mistral import context as auth_ctx
 from mistral.db.v2 import api as db_api_v2
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import clients as rpc
 from mistral.services import security
 from mistral.services import triggers
 
@@ -35,38 +37,55 @@ _periodic_tasks = {}
 class MistralPeriodicTasks(periodic_task.PeriodicTasks):
     @periodic_task.periodic_task(spacing=1, run_immediately=True)
     def process_cron_triggers_v2(self, ctx):
-        for t in triggers.get_next_cron_triggers():
-            LOG.debug("Processing cron trigger: %s" % t)
-
-            # Setup admin context before schedule triggers.
-            ctx = security.create_context(t.trust_id, t.project_id)
-
-            auth_ctx.set_ctx(ctx)
-
-            LOG.debug("Cron trigger security context: %s" % ctx)
+        for trigger in triggers.get_next_cron_triggers():
+            LOG.debug("Processing cron trigger: %s", trigger)
 
             try:
+                # Setup admin context before schedule triggers.
+                ctx = security.create_context(
+                    trigger.trust_id, trigger.project_id
+                )
+
+                auth_ctx.set_ctx(ctx)
+                LOG.debug("Cron trigger security context: %s", ctx)
+
                 # Try to advance the cron trigger next_execution_time and
                 # remaining_executions if relevant.
-                modified = advance_cron_trigger(t)
+                modified = advance_cron_trigger(trigger)
 
                 # If cron trigger was not already modified by another engine.
                 if modified:
                     LOG.debug(
                         "Starting workflow '%s' by cron trigger '%s'",
-                        t.workflow.name, t.name
+                        trigger.workflow.name,
+                        trigger.name
                     )
 
+                    description = {
+                        "description": (
+                            "Workflow execution created by cron"
+                            " trigger '(%s)'." % trigger.id
+                        ),
+                        "triggered_by": {
+                            "type": "cron_trigger",
+                            "id": trigger.id,
+                            "name": trigger.name,
+                        }
+                    }
+
                     rpc.get_engine_client().start_workflow(
-                        t.workflow.name,
-                        t.workflow_input,
-                        description="Workflow execution created "
-                                    "by cron trigger.",
-                        **t.workflow_params
+                        trigger.workflow.name,
+                        trigger.workflow.namespace,
+                        trigger.workflow_input,
+                        description=json.dumps(description),
+                        **trigger.workflow_params
                     )
             except Exception:
                 # Log and continue to next cron trigger.
-                LOG.exception("Failed to process cron trigger %s" % str(t))
+                LOG.exception(
+                    "Failed to process cron trigger %s",
+                    str(trigger)
+                )
             finally:
                 auth_ctx.set_ctx(None)
 
@@ -81,7 +100,11 @@ def advance_cron_trigger(t):
 
         # If this is the last execution.
         if t.remaining_executions == 0:
-            modified_count = db_api_v2.delete_cron_trigger(t.name)
+            modified_count = triggers.delete_cron_trigger(
+                t.name,
+                trust_id=t.trust_id,
+                delete_trust=False
+            )
         else:  # if remaining execution = None or > 0.
             next_time = triggers.get_next_execution_time(
                 t.pattern,
@@ -116,8 +139,8 @@ def setup():
     pt = MistralPeriodicTasks(CONF)
 
     ctx = auth_ctx.MistralContext(
-        user_id=None,
-        project_id=None,
+        user=None,
+        tenant=None,
         auth_token=None,
         is_admin=True
     )

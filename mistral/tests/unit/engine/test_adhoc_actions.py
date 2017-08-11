@@ -41,6 +41,11 @@ actions:
       - s2
     output: "<% $ %> and <% $ %>"
 
+  test_env:
+    base: std.echo
+    base-input:
+      output: '{{ env().foo }}'
+
 workflows:
   wf1:
     type: direct
@@ -81,6 +86,20 @@ workflows:
     tasks:
       concat:
         action: concat_twice
+
+  wf4:
+    type: direct
+    input:
+      - str1
+    output:
+        workflow_result: '{{ _.printenv_result }}'
+
+    tasks:
+      printenv:
+        action: test_env
+        publish:
+          printenv_result: '{{ task().result }}'
+
 """
 
 
@@ -93,6 +112,7 @@ class AdhocActionsTest(base.EngineTestCase):
     def test_run_workflow_with_adhoc_action(self):
         wf_ex = self.engine.start_workflow(
             'my_wb.wf1',
+            '',
             {'str1': 'a', 'str2': 'b'}
         )
 
@@ -112,6 +132,7 @@ class AdhocActionsTest(base.EngineTestCase):
     def test_run_adhoc_action_without_input_value(self):
         wf_ex = self.engine.start_workflow(
             'my_wb.wf2',
+            '',
             {'str1': 'a', 'str2': 'b'}
         )
 
@@ -130,8 +151,24 @@ class AdhocActionsTest(base.EngineTestCase):
     def test_run_adhoc_action_without_sufficient_input_value(self):
         wf_ex = self.engine.start_workflow(
             'my_wb.wf3',
+            '',
             {'str1': 'a', 'str2': 'b'}
         )
 
         self.assertIn("Invalid input", wf_ex.state_info)
         self.assertEqual(states.ERROR, wf_ex.state)
+
+    def test_run_adhoc_action_with_env(self):
+        wf_ex = self.engine.start_workflow(
+            'my_wb.wf4', '', {'str1': 'a'}, env={'foo': 'bar'})
+
+        self.await_workflow_success(wf_ex.id)
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            self.assertDictEqual(
+                {
+                    'workflow_result': 'bar'
+                },
+                wf_ex.output
+            )

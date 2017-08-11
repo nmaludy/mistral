@@ -33,14 +33,17 @@ class CronTriggersController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.CronTrigger, wtypes.text)
     def get(self, name):
-        """Returns the named cron_trigger."""
+        """Returns the named cron_trigger.
+
+        :param name: Name of cron trigger to retrieve
+        """
         acl.enforce('cron_triggers:get', context.ctx())
 
-        LOG.info('Fetch cron trigger [name=%s]' % name)
+        LOG.info('Fetch cron trigger [name=%s]', name)
 
         db_model = db_api.get_cron_trigger(name)
 
-        return resources.CronTrigger.from_dict(db_model.to_dict())
+        return resources.CronTrigger.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(
@@ -52,11 +55,10 @@ class CronTriggersController(rest.RestController):
         """Creates a new cron trigger.
 
         :param cron_trigger: Required. Cron trigger structure.
-
         """
         acl.enforce('cron_triggers:create', context.ctx())
 
-        LOG.info('Create cron trigger: %s' % cron_trigger)
+        LOG.info('Create cron trigger: %s', cron_trigger)
 
         values = cron_trigger.to_dict()
 
@@ -71,17 +73,20 @@ class CronTriggersController(rest.RestController):
             workflow_id=values.get('workflow_id')
         )
 
-        return resources.CronTrigger.from_dict(db_model.to_dict())
+        return resources.CronTrigger.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
     def delete(self, name):
-        """Delete cron trigger."""
+        """Delete cron trigger.
+
+        :param name: Name of cron trigger to delete
+        """
         acl.enforce('cron_triggers:delete', context.ctx())
 
-        LOG.info("Delete cron trigger [name=%s]" % name)
+        LOG.info("Delete cron trigger [name=%s]", name)
 
-        db_api.delete_cron_trigger(name)
+        triggers.delete_cron_trigger(name)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.CronTriggers, types.uuid, int,
@@ -89,13 +94,13 @@ class CronTriggersController(rest.RestController):
                          wtypes.text, wtypes.text, types.uuid, types.jsontype,
                          types.jsontype, resources.SCOPE_TYPES, wtypes.text,
                          wtypes.IntegerType(minimum=1), wtypes.text,
-                         wtypes.text, wtypes.text, wtypes.text)
+                         wtypes.text, wtypes.text, wtypes.text, bool)
     def get_all(self, marker=None, limit=None, sort_keys='created_at',
                 sort_dirs='asc', fields='', name=None, workflow_name=None,
                 workflow_id=None, workflow_input=None, workflow_params=None,
                 scope=None, pattern=None, remaining_executions=None,
                 first_execution_time=None, next_execution_time=None,
-                created_at=None, updated_at=None):
+                created_at=None, updated_at=None, all_projects=False):
         """Return all cron triggers.
 
         :param marker: Optional. Pagination marker for large data sets.
@@ -133,8 +138,12 @@ class CronTriggersController(rest.RestController):
                            time and date.
         :param updated_at: Optional. Keep only resources with specific latest
                            update time and date.
+        :param all_projects: Optional. Get resources of all projects.
         """
         acl.enforce('cron_triggers:list', context.ctx())
+
+        if all_projects:
+            acl.enforce('cron_triggers:list:all_projects', context.ctx())
 
         filters = filter_utils.create_filters_from_request_params(
             created_at=created_at,
@@ -153,8 +162,8 @@ class CronTriggersController(rest.RestController):
 
         LOG.info(
             "Fetch cron triggers. marker=%s, limit=%s, sort_keys=%s, "
-            "sort_dirs=%s, filters=%s",
-            marker, limit, sort_keys, sort_dirs, filters
+            "sort_dirs=%s, filters=%s, all_projects=%s",
+            marker, limit, sort_keys, sort_dirs, filters, all_projects
         )
 
         return rest_utils.get_all(
@@ -167,5 +176,6 @@ class CronTriggersController(rest.RestController):
             sort_keys=sort_keys,
             sort_dirs=sort_dirs,
             fields=fields,
+            all_projects=all_projects,
             **filters
         )

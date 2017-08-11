@@ -41,9 +41,10 @@ class ExecutionExpirationPolicy(periodic_task.PeriodicTasks):
         super(ExecutionExpirationPolicy, self).__init__(conf)
 
         interval = CONF.execution_expiration_policy.evaluation_interval
-        older_than = CONF.execution_expiration_policy.older_than
+        ot = CONF.execution_expiration_policy.older_than
+        mfe = CONF.execution_expiration_policy.max_finished_executions
 
-        if (interval and older_than and older_than >= 1):
+        if interval and ((ot and ot >= 1) or (mfe and mfe >= 1)):
             _periodic_task = periodic_task.periodic_task(
                 spacing=interval * 60,
                 run_immediately=True
@@ -54,43 +55,70 @@ class ExecutionExpirationPolicy(periodic_task.PeriodicTasks):
             )
         else:
             LOG.debug("Expiration policy disabled. Evaluation_interval "
-                      "is not configured or older_than < '1'.")
+                      "is not configured or both older_than and "
+                      "max_finished_executions < '1'.")
+
+
+def _delete_executions(batch_size, expiration_time,
+                       max_finished_executions):
+    while True:
+        with db_api.transaction():
+            # TODO(gpaz): In the future should use generic method with
+            # filters params and not specific method that filter by time.
+            execs = db_api.get_executions_to_clean(
+                expiration_time,
+                limit=batch_size,
+                max_finished_executions=max_finished_executions
+            )
+
+            if not execs:
+                break
+            _delete(execs)
+
+
+def _delete(executions):
+    for execution in executions:
+        try:
+            # Setup project_id for _secure_query delete execution.
+            # TODO(tuan_luong): Manipulation with auth_ctx should be
+            # out of db transaction scope.
+            ctx = auth_ctx.MistralContext(
+                user=None,
+                tenant=execution.project_id,
+                auth_token=None,
+                is_admin=True
+            )
+            auth_ctx.set_ctx(ctx)
+
+            LOG.debug(
+                'DELETE execution id : %s from date : %s '
+                'according to expiration policy',
+                execution.id,
+                execution.updated_at
+            )
+            db_api.delete_workflow_execution(execution.id)
+        except Exception as e:
+            msg = ("Failed to delete [execution_id=%s]\n %s"
+                   % (execution.id, traceback.format_exc(e)))
+            LOG.warning(msg)
+        finally:
+            auth_ctx.set_ctx(None)
 
 
 def run_execution_expiration_policy(self, ctx):
-    LOG.debug("Starting expiration policy task.")
+    LOG.debug("Starting expiration policy.")
 
     older_than = CONF.execution_expiration_policy.older_than
     exp_time = (datetime.datetime.utcnow()
                 - datetime.timedelta(minutes=older_than))
 
-    with db_api.transaction():
-        # TODO(gpaz): In the future should use generic method with
-        # filters params and not specific method that filter by time.
-        for execution in db_api.get_expired_executions(exp_time):
-            try:
-                # Setup project_id for _secure_query delete execution.
-                ctx = auth_ctx.MistralContext(
-                    user_id=None,
-                    project_id=execution.project_id,
-                    auth_token=None,
-                    is_admin=True
-                )
-                auth_ctx.set_ctx(ctx)
+    batch_size = CONF.execution_expiration_policy.batch_size
+    max_executions = CONF.execution_expiration_policy.max_finished_executions
 
-                LOG.debug(
-                    'DELETE execution id : %s from date : %s '
-                    'according to expiration policy',
-                    execution.id,
-                    execution.updated_at
-                )
-                db_api.delete_workflow_execution(execution.id)
-            except Exception as e:
-                msg = ("Failed to delete [execution_id=%s]\n %s"
-                       % (execution.id, traceback.format_exc(e)))
-                LOG.warning(msg)
-            finally:
-                auth_ctx.set_ctx(None)
+    # The default value of batch size is 0
+    # If it is not set, size of batch will be the size
+    # of total number of expired executions.
+    _delete_executions(batch_size, exp_time, max_executions)
 
 
 def setup():
@@ -98,8 +126,8 @@ def setup():
     pt = ExecutionExpirationPolicy(CONF)
 
     ctx = auth_ctx.MistralContext(
-        user_id=None,
-        project_id=None,
+        user=None,
+        tenant=None,
         auth_token=None,
         is_admin=True
     )

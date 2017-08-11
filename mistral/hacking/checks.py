@@ -30,23 +30,34 @@ import six
 oslo_namespace_imports_dot = re.compile(r"import[\s]+oslo[.][^\s]+")
 oslo_namespace_imports_from_dot = re.compile(r"from[\s]+oslo[.]")
 oslo_namespace_imports_from_root = re.compile(r"from[\s]+oslo[\s]+import[\s]+")
-assert_equal_end_with_none_re = re.compile(
-    r"(.)*assertEqual\((\w|\.|\'|\"|\[|\])+, None\)")
-assert_equal_start_with_none_re = re.compile(
-    r"(.)*assertEqual\(None, (\w|\.|\'|\"|\[|\])+\)")
 
 
-def assert_equal_none(logical_line):
-    """Check for assertEqual(A, None) or assertEqual(None, A) sentences
+def no_assert_equal_true_false(logical_line):
+    """Check for assertTrue/assertFalse sentences
 
-    M318
+    M319
     """
-    msg = ("M318: assertEqual(A, None) or assertEqual(None, A) "
-           "sentences not allowed. Use assertIsNone instead.")
-    res = (assert_equal_start_with_none_re.match(logical_line) or
-           assert_equal_end_with_none_re.match(logical_line))
-    if res:
-        yield (0, msg)
+    _start_re = re.compile(r'assert(Not)?Equal\((True|False),')
+    _end_re = re.compile(r'assert(Not)?Equal\(.*,\s+(True|False)\)$')
+
+    if _start_re.search(logical_line) or _end_re.search(logical_line):
+        yield (0, "M319: assertEqual(A, True|False), "
+               "assertEqual(True|False, A), assertNotEqual(A, True|False), "
+               "or assertEqual(True|False, A) sentences must not be used. "
+               "Use assertTrue(A) or assertFalse(A) instead")
+
+
+def no_assert_true_false_is_not(logical_line):
+    """Check for assertIs/assertIsNot sentences
+
+    M320
+    """
+    _re = re.compile(r'assert(True|False)\(.+\s+is\s+(not\s+)?.+\)$')
+
+    if _re.search(logical_line):
+        yield (0, "M320: assertTrue(A is|is not B) or "
+               "assertFalse(A is|is not B) sentences must not be used. "
+               "Use assertIs(A, B) or assertIsNot(A, B) instead")
 
 
 def check_oslo_namespace_imports(logical_line):
@@ -71,6 +82,27 @@ def check_python3_xrange(logical_line):
     if re.search(r"\bxrange\s*\(", logical_line):
         yield(0, "M327: Do not use xrange(). 'xrange()' is not compatible "
               "with Python 3. Use range() or six.moves.range() instead.")
+
+
+def check_python3_no_iteritems(logical_line):
+    msg = ("M328: Use six.iteritems() instead of dict.iteritems().")
+
+    if re.search(r".*\.iteritems\(\)", logical_line):
+        yield(0, msg)
+
+
+def check_python3_no_iterkeys(logical_line):
+    msg = ("M329: Use six.iterkeys() instead of dict.iterkeys().")
+
+    if re.search(r".*\.iterkeys\(\)", logical_line):
+        yield(0, msg)
+
+
+def check_python3_no_itervalues(logical_line):
+    msg = ("M330: Use six.itervalues() instead of dict.itervalues().")
+
+    if re.search(r".*\.itervalues\(\)", logical_line):
+        yield(0, msg)
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -233,6 +265,11 @@ class CheckForLoggingIssues(BaseASTChecker):
 
 
 def factory(register):
-    register(assert_equal_none)
+    register(no_assert_equal_true_false)
+    register(no_assert_true_false_is_not)
     register(check_oslo_namespace_imports)
     register(CheckForLoggingIssues)
+    register(check_python3_no_iteritems)
+    register(check_python3_no_iterkeys)
+    register(check_python3_no_itervalues)
+    register(check_python3_xrange)

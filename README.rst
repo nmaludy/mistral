@@ -2,41 +2,24 @@
 Team and repository tags
 ========================
 
-.. image:: http://governance.openstack.org/badges/mistral.svg
-    :target: http://governance.openstack.org/reference/tags/index.html
-
-.. Change things from this point on
+.. image:: https://governance.openstack.org/badges/mistral.svg
+    :target: https://governance.openstack.org/reference/tags/index.html
 
 Mistral
 =======
 
-Workflow Service for OpenStack cloud.
+Workflow Service for OpenStack cloud. This project aims to provide a mechanism
+to define tasks and workflows without writing code, manage and execute them in
+the cloud environment.
 
 Installation
 ~~~~~~~~~~~~
 
-Prerequisites
--------------
+The following are the steps to install Mistral on debian-based systems.
 
-It is necessary to install some specific system libs for installing Mistral.
-They can be installed on most popular operating systems using their package
-manager (for Ubuntu - *apt*, for Fedora, CentOS - *yum*, for Mac OS - *brew*
-or *macports*).
+To install Mistral, you have to install the following prerequisites::
 
-The list of needed packages is shown below:
-
-* **python-dev**
-* **python-setuptools**
-* **python-pip**
-* **libffi-dev**
-* **libxslt1-dev (or libxslt-dev)**
-* **libxml2-dev**
-* **libyaml-dev**
-* **libssl-dev**
-
-In case of ubuntu, just run::
-
- apt-get install python-dev python-setuptools libffi-dev \
+ $ apt-get install python-dev python-setuptools libffi-dev \
    libxslt1-dev libxml2-dev libyaml-dev libssl-dev
 
 **Mistral can be used without authentication at all or it can work with
@@ -58,24 +41,7 @@ First of all, clone the repo and go to the repo directory::
 **Devstack installation**
 
 Information about how to install Mistral with devstack can be found
-`here <http://docs.openstack.org/developer/mistral/developer/devstack.html>`_.
-
-**Virtualenv installation**::
-
-  $ tox
-
-This will install necessary virtual environments and run all the project tests.
-Installing virtual environments may take significant time (~10-15 mins).
-
-**Local installation**::
-
-  $ pip install -e .
-
-or::
-
-  $ pip install -r requirements.txt
-  $ python setup.py install
-
+`here <https://docs.openstack.org/mistral/latest/contributor/devstack.html>`_.
 
 Configuring Mistral
 ~~~~~~~~~~~~~~~~~~~
@@ -103,9 +69,10 @@ an OpenStack environment.
    * Create the database and grant privileges::
 
      $ mysql -u root -p
-       CREATE DATABASE mistral;
-       USE mistral
-       GRANT ALL ON mistral.* TO 'root'@'localhost';
+       mysql> CREATE DATABASE mistral;
+       mysql> USE mistral;
+       mysql> GRANT ALL PRIVILEGES ON mistral.* TO 'mistral'@'localhost' IDENTIFIED BY 'MISTRAL_DBPASS';
+       mysql> GRANT ALL PRIVILEGES ON mistral.* TO 'mistral'@'%' IDENTIFIED BY 'MISTRAL_DBPASS';
 
 #. Generate ``mistral.conf`` file::
 
@@ -117,14 +84,14 @@ an OpenStack environment.
 
     $ sudo mkdir /etc/mistral
     $ sudo chown `whoami` /etc/mistral
-    $ cp etc/event_definitionas.yml.sample /etc/mistral/event_definitions.yml
+    $ cp etc/event_definitions.yml.sample /etc/mistral/event_definitions.yml
     $ cp etc/logging.conf.sample /etc/mistral/logging.conf
     $ cp etc/policy.json /etc/mistral/policy.json
     $ cp etc/wf_trace_logging.conf.sample /etc/mistral/wf_trace_logging.conf
     $ cp etc/mistral.conf.sample /etc/mistral/mistral.conf
 
-#. Edit file ``/etc/mistral/mistral.conf`` according to your setup. Pay attention to
-   the following sections and options::
+#. Edit file ``/etc/mistral/mistral.conf`` according to your setup. Pay attention
+   to the following sections and options::
 
     [oslo_messaging_rabbit]
     rabbit_host = <RABBIT_HOST>
@@ -145,8 +112,8 @@ an OpenStack environment.
 #. Provide valid keystone auth properties::
 
     [keystone_authtoken]
-    auth_uri = http://<Keystone-host>/identity_v2_admin/v3
-    identity_uri = http://<Keystone-host/identity_v2_admin
+    auth_uri = http://keystone-host:port/v3
+    identity_uri = http://keystone-host:port
     auth_version = v3
     admin_user = <user>
     admin_password = <password>
@@ -165,9 +132,8 @@ an OpenStack environment.
    of OpenStack projects in your deployment. Please find more detailed
    information in the ``tools/get_action_list.py`` script.
 
-
 Before the First Run
-~~~~~~~~~~~~~~~~~~~~
+--------------------
 
 After local installation you will find the commands ``mistral-server`` and
 ``mistral-db-manage`` available in your environment. The ``mistral-db-manage``
@@ -180,50 +146,35 @@ To update the database schema to the latest revision, type::
 
   $ mistral-db-manage --config-file <path_to_config> upgrade head
 
+To populate the database with standard actions and workflows, type::
+  $ mistral-db-manage --config-file <path_to_config> populate
+
 For more detailed information about ``mistral-db-manage`` script please check
 file ``mistral/db/sqlalchemy/migration/alembic_migrations/README.md``.
 
-** NOTE: For users want a dry run with SQLite backend(not used in production),
-``mistral-db-manage`` is not recommended for database initialization due to
-`SQLite limitations <http://www.sqlite.org/omitted.html>`_. Please use
-``sync_db`` script described below instead for database initialization.
-
-Before starting Mistral server, run ``sync_db`` script. It prepares the DB,
-creates in it with all standard actions and standard workflows which Mistral
-provides for all mistral users.
-
-If you are using virtualenv::
-
-  $ tools/sync_db.sh --config-file <path_to_config>
-
-Or run ``sync_db`` directly::
-
-  $ python tools/sync_db.py --config-file <path_to_config>
-
-
 Running Mistral API server
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------------
 
 To run Mistral API server::
 
   $ tox -evenv -- python mistral/cmd/launch.py \
-      --server api --config-file <path_to_config>
+    --server api --config-file <path_to_config>
 
 Running Mistral Engines
-~~~~~~~~~~~~~~~~~~~~~~~
+-----------------------
 
 To run Mistral Engine::
 
   $ tox -evenv -- python mistral/cmd/launch.py \
-      --server engine --config-file <path_to_config>
+    --server engine --config-file <path_to_config>
 
 Running Mistral Task Executors
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+------------------------------
 
 To run Mistral Task Executor instance::
 
   $ tox -evenv -- python mistral/cmd/launch.py \
-      --server executor --config-file <path_to_config>
+    --server executor --config-file <path_to_config>
 
 Note that at least one Engine instance and one Executor instance should be
 running in order for workflow tasks to be processed by Mistral.
@@ -245,13 +196,13 @@ the ``target`` property of a task to specify the executor::
     ... Workflow YAML ...
 
 Running Multiple Mistral Servers Under the Same Process
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-------------------------------------------------------
 
 To run more than one server (API, Engine, or Task Executor) on the same
 process::
 
   $ tox -evenv -- python mistral/cmd/launch.py \
-      --server api,engine --config-file <path_to_config>
+    --server api,engine --config-file <path_to_config>
 
 The value for the ``--server`` option can be a comma-delimited list. The valid
 options are ``all`` (which is the default if not specified) or any combination
@@ -262,75 +213,56 @@ defined in the configuration file should only be used if ``all`` Mistral
 servers are launched on the same process. Otherwise, messages do not get
 delivered because the ``fake`` transport is using an in-process queue.
 
+Project Goals 2017
+------------------
 
-Mistral Client
-~~~~~~~~~~~~~~
+#. **Complete Mistral documentation**.
 
-The Mistral command line tool is provided by the ``python-mistralclient``
-package which is available
-`here <https://git.openstack.org/openstack/python-mistralclient>`__.
+   Mistral documentation should be more usable. It requires focused work to
+   make it well structured, eliminate gaps in API/Mistral Workflow Language
+   specifications, add more examples and tutorials.
 
+   *Definition of done*:
+   All capabilities are covered, all documentation topics are written using
+   the same style and structure principles. The obvious sub-goal of this goal
+   is to establish these principles.
 
-Debugging
-~~~~~~~~~
+#. **Complete Mistral Custom Actions API**.
 
-To debug using a local engine and executor without dependencies such as
-RabbitMQ, make sure your ``/etc/mistral/mistral.conf`` has the following settings::
+   There has been the initiative in Mistral team since April of 2016 to
+   refactor Mistral actions subsystem in order to make the process of
+   developing Mistral actions easier and clearer. In 2017 we need to complete
+   this effort and make sure that all APIs are stable and it’s well-documented.
 
-  [DEFAULT]
-  rpc_backend = fake
+   *Definition of done*:
+   All API interfaces are stable, existing actions are rewritten using this new
+   API, OpenStack actions are also rewritten based on the new API and moved to
+   mistral-extra repo. Everything is well documented and the doc has enough
+   examples.
 
-  [pecan]
-  auth_enable = False
+#. **Finish Mistral multi-node mode**.
 
-and run the following command in *pdb*, *PyDev* or *PyCharm*::
+   Mistral needs to be proven to work reliably in multi-node mode. In order
+   to achieve it we need to make a number of engine, executor and RPC
+   changes and configure a CI gate to run stress tests on multi-node Mistral.
 
-  mistral/cmd/launch.py --server all --config-file /etc/mistral/mistral.conf --use-debugger
+   *Definition of done*:
+   CI gate supports MySQL, all critically important functionality (join,
+   with-items, parallel workflows, sequential workflows) is covered by tests.
 
-.. note::
+#. **Reduce workflow execution time**.
 
-    In PyCharm, you also need to enable the Gevent compatibility flag in
-    Settings -> Build, Execution, Deployment -> Python Debugger -> Gevent
-    compatible. Without this setting, PyCharm will not show variable values
-    and become unstable during debugging.
+   *Definition of done*: Average workflow execution time reduced by 30%.
 
+Project Resources
+-----------------
 
-Running unit tests in PyCharm
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* `Mistral Official Documentation <https://docs.openstack.org/mistral/latest/>`_
 
-In order to be able to conveniently run unit tests, you need to:
+* Project status, bugs, and blueprints are tracked on
+  `Launchpad <https://launchpad.net/mistral/>`_
 
-1. Set unit tests as the default runner:
+* Additional resources are linked from the project
+  `Wiki <https://wiki.openstack.org/wiki/Mistral/>`_ page
 
-  Settings -> Tools -> Python Integrated Tools -> Default test runner: Unittests
-
-2. Enable test detection for all classes:
-
-  Run/Debug Configurations -> Defaults -> Python tests -> Unittests -> uncheck
-  Inspect only subclasses of unittest.TestCase
-
-Running examples
-~~~~~~~~~~~~~~~~
-
-To run the examples find them in mistral-extra repository
-(https://github.com/openstack/mistral-extra) and follow the instructions on
-each example.
-
-
-Tests
-~~~~~
-
-You can run some of the functional tests in non-openstack mode locally. To do
-this:
-
-#. set ``auth_enable = False`` in the ``mistral.conf`` and restart Mistral
-#. execute::
-
-    $ ./run_functional_tests.sh
-
-To run tests for only one version need to specify it::
-
-  $ bash run_functional_tests.sh v1
-
-More information about automated tests for Mistral can be found on
-`Mistral Wiki <https://wiki.openstack.org/wiki/Mistral/Testing>`_.
+* Apache License Version 2.0 http://www.apache.org/licenses/LICENSE-2.0

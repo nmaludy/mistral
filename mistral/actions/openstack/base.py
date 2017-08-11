@@ -16,21 +16,16 @@ import abc
 import inspect
 import traceback
 
-from cachetools import LRUCache
-
 from oslo_log import log
 
-from mistral.actions import base
-from mistral import context
 from mistral import exceptions as exc
 from mistral.utils.openstack import keystone as keystone_utils
-
-from threading import Lock
+from mistral_lib import actions
 
 LOG = log.getLogger(__name__)
 
 
-class OpenStackAction(base.Action):
+class OpenStackAction(actions.Action):
     """OpenStack Action.
 
     OpenStack Action is the basis of all OpenStack-specific actions,
@@ -38,20 +33,22 @@ class OpenStackAction(base.Action):
     """
     _kwargs_for_run = {}
     client_method_name = None
-    _clients = LRUCache(100)
-    _lock = Lock()
+    _service_name = None
+    _service_type = None
+    _client_class = None
 
     def __init__(self, **kwargs):
         self._kwargs_for_run = kwargs
+        self.action_region = self._kwargs_for_run.pop('action_region', None)
 
     @abc.abstractmethod
-    def _create_client(self):
-        """Creates client required for action operation"""
-        pass
+    def _create_client(self, context):
+        """Creates client required for action operation."""
+        return None
 
     @classmethod
     def _get_client_class(cls):
-        return None
+        return cls._client_class
 
     @classmethod
     def _get_client_method(cls, client):
@@ -77,52 +74,45 @@ class OpenStackAction(base.Action):
     def get_fake_client_method(cls):
         return cls._get_client_method(cls._get_fake_client())
 
-    def _get_client(self):
+    def _get_client(self, context):
         """Returns python-client instance via cache or creation
 
         Gets client instance according to specific OpenStack Service
         (e.g. Nova, Glance, Heat, Keystone etc)
 
         """
+        return self._create_client(context)
 
-        # TODO(d0ugal): Caching has caused some security problems and
-        #               regressions in Mistral. It is disabled for now and
-        #               will be revisited in Ocata. See:
-        #               https://bugs.launchpad.net/mistral/+bug/1627689
-        return self._create_client()
+    def get_session_and_auth(self, context):
+        """Get keystone session and auth parameters.
 
-        ctx = context.ctx()
-        client_class = self.__class__.__name__
-        # Colon character is reserved (rfc3986) which avoids key collisions.
-        key = client_class + ':' + ctx.project_id
+        :param context: the action context
+        :return: dict that can be used to initialize service clients
+        """
 
-        def create_cached_client():
-            new_client = self._create_client()
-            new_client._mistral_ctx_expires_at = ctx.expires_at
+        return keystone_utils.get_session_and_auth(
+            service_name=self._service_name,
+            service_type=self._service_type,
+            region_name=self.action_region,
+            context=context)
 
-            with self._lock:
-                self._clients[key] = new_client
+    def get_service_endpoint(self):
+        """Get OpenStack service endpoint.
 
-            return new_client
+        'service_name' and 'service_type' are defined in specific OpenStack
+        service action.
+        """
+        endpoint = keystone_utils.get_endpoint_for_project(
+            service_name=self._service_name,
+            service_type=self._service_type,
+            region_name=self.action_region
+        )
 
-        with self._lock:
-            client = self._clients.get(key)
+        return endpoint
 
-        if client is None:
-            return create_cached_client()
-
-        if keystone_utils.will_expire_soon(client._mistral_ctx_expires_at):
-            LOG.debug("cache expiring soon, will refresh client")
-
-            return create_cached_client()
-
-        LOG.debug("cache not expiring soon, will return cached client")
-
-        return client
-
-    def run(self):
+    def run(self, context):
         try:
-            method = self._get_client_method(self._get_client())
+            method = self._get_client_method(self._get_client(context))
 
             result = method(**self._kwargs_for_run)
 
@@ -135,14 +125,12 @@ class OpenStackAction(base.Action):
             # where the issue comes from.
             LOG.warning(traceback.format_exc())
 
-            e_str = '%s: %s' % (type(e), e.message)
-
             raise exc.ActionException(
                 "%s.%s failed: %s" %
-                (self.__class__.__name__, self.client_method_name, e_str)
+                (self.__class__.__name__, self.client_method_name, str(e))
             )
 
-    def test(self):
+    def test(self, context):
         return dict(
             zip(self._kwargs_for_run, ['test'] * len(self._kwargs_for_run))
         )

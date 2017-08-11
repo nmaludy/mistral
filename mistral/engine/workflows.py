@@ -22,21 +22,22 @@ import six
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models as db_models
 from mistral.engine import dispatcher
-from mistral.engine.rpc_backend import rpc
-from mistral.engine import utils as eng_utils
+from mistral.engine import utils as engine_utils
 from mistral import exceptions as exc
+from mistral.lang import parser as spec_parser
+from mistral.rpc import clients as rpc
 from mistral.services import scheduler
+from mistral.services import triggers
 from mistral.services import workflows as wf_service
 from mistral import utils
 from mistral.utils import merge_dicts
 from mistral.utils import wf_trace
-from mistral.workbook import parser as spec_parser
 from mistral.workflow import base as wf_base
 from mistral.workflow import commands
 from mistral.workflow import data_flow
 from mistral.workflow import lookup_utils
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
 
 
 LOG = logging.getLogger(__name__)
@@ -85,23 +86,27 @@ class Workflow(object):
 
         wf_trace.info(
             self.wf_ex,
-            "Starting workflow [name=%s, input=%s]" %
+            'Starting workflow [name=%s, input=%s]' %
             (wf_def.name, utils.cut(input_dict))
         )
 
-        # TODO(rakhmerov): This call implicitly changes input_dict! Fix it!
-        # After fix we need to move validation after adding risky fields.
-        eng_utils.validate_input(wf_def, input_dict, self.wf_spec)
+        self.validate_input(input_dict)
 
-        self._create_execution(wf_def, input_dict, desc, params)
+        self._create_execution(
+            wf_def,
+            self.prepare_input(input_dict),
+            desc,
+            params
+        )
 
         self.set_state(states.RUNNING)
 
         wf_ctrl = wf_base.get_controller(self.wf_ex, self.wf_spec)
 
-        cmds = wf_ctrl.continue_workflow()
-
-        dispatcher.dispatch_workflow_commands(self.wf_ex, cmds)
+        dispatcher.dispatch_workflow_commands(
+            self.wf_ex,
+            wf_ctrl.continue_workflow()
+        )
 
     def stop(self, state, msg=None):
         """Stop workflow.
@@ -120,6 +125,29 @@ class Workflow(object):
 
             return self._cancel_workflow(msg)
 
+    def pause(self, msg=None):
+        """Pause workflow.
+
+        :param msg: Additional explaining message.
+        """
+
+        assert self.wf_ex
+
+        if states.is_paused(self.wf_ex.state):
+            return
+
+        # Set the state of this workflow to paused.
+        self.set_state(states.PAUSED, state_info=msg)
+
+        # If workflow execution is a subworkflow,
+        # schedule update to the task execution.
+        if self.wf_ex.task_execution_id:
+            # Import the task_handler module here to avoid circular reference.
+            from mistral.engine import task_handler
+            task_handler.schedule_on_action_update(self.wf_ex)
+
+        return
+
     def resume(self, env=None):
         """Resume workflow.
 
@@ -130,7 +158,7 @@ class Workflow(object):
 
         wf_service.update_workflow_execution_env(self.wf_ex, env)
 
-        self.set_state(states.RUNNING, recursive=True)
+        self.set_state(states.RUNNING)
 
         wf_ctrl = wf_base.get_controller(self.wf_ex)
 
@@ -138,6 +166,28 @@ class Workflow(object):
         cmds = wf_ctrl.continue_workflow()
 
         self._continue_workflow(cmds)
+
+        # If workflow execution is a subworkflow,
+        # schedule update to the task execution.
+        if self.wf_ex.task_execution_id:
+            # Import the task_handler module here to avoid circular reference.
+            from mistral.engine import task_handler
+            task_handler.schedule_on_action_update(self.wf_ex)
+
+    def prepare_input(self, input_dict):
+        for k, v in self.wf_spec.get_input().items():
+            if k not in input_dict or input_dict[k] is utils.NotDefined:
+                input_dict[k] = v
+
+        return input_dict
+
+    def validate_input(self, input_dict):
+        engine_utils.validate_input(
+            self.wf_spec.get_input(),
+            input_dict,
+            self.wf_spec.get_name(),
+            self.wf_spec.__class__.__name__
+        )
 
     def rerun(self, task_ex, reset=True, env=None):
         """Rerun workflow from the given task.
@@ -200,8 +250,13 @@ class Workflow(object):
             final_context = wf_ctrl.evaluate_workflow_final_context()
         except Exception as e:
             LOG.warning(
-                'Failed to get final context for %s: %s' % (self.wf_ex, e)
+                'Failed to get final context for workflow execution. '
+                '[wf_ex_id: %s, wf_name: %s, error: %s]',
+                self.wf_ex.id,
+                self.wf_ex.name,
+                str(e)
             )
+
         return final_context
 
     def _create_execution(self, wf_def, input_dict, desc, params):
@@ -209,6 +264,7 @@ class Workflow(object):
             'name': wf_def.name,
             'description': desc,
             'workflow_name': wf_def.name,
+            'workflow_namespace': wf_def.namespace,
             'workflow_id': wf_def.id,
             'spec': self.wf_spec.to_dict(),
             'state': states.IDLE,
@@ -268,6 +324,8 @@ class Workflow(object):
             # No need to keep task executions of this workflow in the
             # lookup cache anymore.
             lookup_utils.invalidate_cached_task_executions(self.wf_ex.id)
+
+            triggers.on_workflow_complete(self.wf_ex)
 
         if recursive and self.wf_ex.task_execution_id:
             parent_task_ex = db_api.get_task_execution(
@@ -426,25 +484,25 @@ def _send_result_to_parent_workflow(wf_ex_id):
         wf_output = wf_ex.output
 
     if wf_ex.state == states.SUCCESS:
-        result = wf_utils.Result(data=wf_output)
+        result = ml_actions.Result(data=wf_output)
     elif wf_ex.state == states.ERROR:
         err_msg = (
             wf_ex.state_info or
             'Failed subworkflow [execution_id=%s]' % wf_ex.id
         )
 
-        result = wf_utils.Result(error=err_msg)
+        result = ml_actions.Result(error=err_msg)
     elif wf_ex.state == states.CANCELLED:
         err_msg = (
             wf_ex.state_info or
             'Cancelled subworkflow [execution_id=%s]' % wf_ex.id
         )
 
-        result = wf_utils.Result(error=err_msg, cancel=True)
+        result = ml_actions.Result(error=err_msg, cancel=True)
     else:
         raise RuntimeError(
             "Method _send_result_to_parent_workflow() must never be called"
-            " if a workflow is not in SUCCESS, ERROR or CNCELLED state."
+            " if a workflow is not in SUCCESS, ERROR or CANCELLED state."
         )
 
     rpc.get_engine_client().on_action_complete(

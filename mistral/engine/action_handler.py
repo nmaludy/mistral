@@ -21,7 +21,7 @@ from mistral.db.v2.sqlalchemy import models
 from mistral.engine import actions
 from mistral.engine import task_handler
 from mistral import exceptions as exc
-from mistral.workbook import parser as spec_parser
+from mistral.lang import parser as spec_parser
 
 
 LOG = logging.getLogger(__name__)
@@ -52,6 +52,31 @@ def on_action_complete(action_ex, result):
 
     if task_ex:
         task_handler.schedule_on_action_complete(action_ex)
+
+
+@profiler.trace('action-handler-on-action-update', hide_args=True)
+def on_action_update(action_ex, state):
+    task_ex = action_ex.task_execution
+
+    action = _build_action(action_ex)
+
+    try:
+        action.update(state)
+    except exc.MistralException as e:
+        # If the update of the action execution fails, do not fail
+        # the action execution. Log the exception and re-raise the
+        # exception.
+        msg = (
+            "Failed to update action [error=%s, action=%s, task=%s]:\n%s"
+            % (e, action_ex.name, task_ex.name, tb.format_exc())
+        )
+
+        LOG.error(msg)
+
+        raise
+
+    if task_ex:
+        task_handler.schedule_on_action_update(action_ex)
 
 
 @profiler.trace('action-handler-build-action', hide_args=True)

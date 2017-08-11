@@ -15,23 +15,28 @@
 
 import abc
 from oslo_config import cfg
+from oslo_log import log as logging
 from osprofiler import profiler
 import six
 
 from mistral.db.v2 import api as db_api
 from mistral.engine import action_queue
-from mistral.engine.rpc_backend import rpc
-from mistral.engine import utils as e_utils
+from mistral.engine import utils as engine_utils
 from mistral.engine import workflow_handler as wf_handler
 from mistral import exceptions as exc
+from mistral.executors import base as exe
 from mistral import expressions as expr
+from mistral.lang import parser as spec_parser
 from mistral.services import action_manager as a_m
 from mistral.services import security
 from mistral import utils
 from mistral.utils import wf_trace
-from mistral.workbook import parser as spec_parser
+from mistral.workflow import data_flow
 from mistral.workflow import states
-from mistral.workflow import utils as wf_utils
+from mistral_lib import actions as ml_actions
+
+
+LOG = logging.getLogger(__name__)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -67,6 +72,23 @@ class Action(object):
 
         self.action_ex.state = states.ERROR
         self.action_ex.output = {'result': msg}
+
+    def update(self, state):
+        assert self.action_ex
+
+        if state == states.PAUSED and self.is_sync(self.action_ex.input):
+            raise exc.InvalidStateTransitionException(
+                'Transition to the PAUSED state is only supported '
+                'for asynchronous action execution.'
+            )
+
+        if not states.is_valid_transition(self.action_ex.state, state):
+            raise exc.InvalidStateTransitionException(
+                'Invalid state transition from %s to %s.' %
+                (self.action_ex.state, state)
+            )
+
+        self.action_ex.state = state
 
     @abc.abstractmethod
     def schedule(self, input_dict, target, index=0, desc='', safe_rerun=False):
@@ -139,6 +161,7 @@ class Action(object):
             values.update({
                 'task_execution_id': self.task_ex.id,
                 'workflow_name': self.task_ex.workflow_name,
+                'workflow_namespace': self.task_ex.workflow_namespace,
                 'workflow_id': self.task_ex.workflow_id,
                 'project_id': self.task_ex.project_id,
             })
@@ -251,14 +274,16 @@ class PythonAction(Action):
                 action_ex_id=action_ex_id
             )
 
-        result = rpc.get_executor_client().run_action(
+        executor = exe.get_executor(cfg.CONF.executor.type)
+
+        result = executor.run_action(
             self.action_ex.id if self.action_ex else None,
             self.action_def.action_class,
             self.action_def.attributes or {},
             input_dict,
-            target,
-            async_=False,
-            safe_rerun=safe_rerun
+            safe_rerun=safe_rerun,
+            target=target,
+            async_=False
         )
 
         return self._prepare_output(result)
@@ -274,10 +299,19 @@ class PythonAction(Action):
         if self.action_def.action_class:
             self._inject_action_ctx_for_validating(input_dict)
 
-        # NOTE(xylan): Don't validate action input if action initialization
+        # NOTE(kong): Don't validate action input if action initialization
         # method contains ** argument.
-        if '**' not in self.action_def.input:
-            e_utils.validate_input(self.action_def, input_dict)
+        if '**' in self.action_def.input:
+            return
+
+        expected_input = utils.get_dict_from_string(self.action_def.input)
+
+        engine_utils.validate_input(
+            expected_input,
+            input_dict,
+            self.action_def.name,
+            self.action_def.action_class
+        )
 
     def _prepare_input(self, input_dict):
         """Template method to do manipulations with input parameters.
@@ -323,7 +357,8 @@ class PythonAction(Action):
 class AdHocAction(PythonAction):
     """Ad-hoc action."""
 
-    def __init__(self, action_def, action_ex=None, task_ex=None):
+    def __init__(self, action_def, action_ex=None, task_ex=None, task_ctx=None,
+                 wf_ctx=None):
         self.action_spec = spec_parser.get_action_spec(action_def.spec)
 
         base_action_def = db_api.get_action_definition(
@@ -340,12 +375,17 @@ class AdHocAction(PythonAction):
         )
 
         self.adhoc_action_def = action_def
+        self.task_ctx = task_ctx or {}
+        self.wf_ctx = wf_ctx or {}
 
     def validate_input(self, input_dict):
-        e_utils.validate_input(
-            self.adhoc_action_def,
+        expected_input = self.action_spec.get_input()
+
+        engine_utils.validate_input(
+            expected_input,
             input_dict,
-            self.action_spec
+            self.adhoc_action_def.name,
+            self.action_spec.__class__.__name__
         )
 
         super(AdHocAction, self).validate_input(
@@ -353,15 +393,25 @@ class AdHocAction(PythonAction):
         )
 
     def _prepare_input(self, input_dict):
+        for k, v in self.action_spec.get_input().items():
+            if k not in input_dict or input_dict[k] is utils.NotDefined:
+                input_dict[k] = v
+
         base_input_dict = input_dict
 
         for action_def in self.adhoc_action_defs:
             action_spec = spec_parser.get_action_spec(action_def.spec)
             base_input_expr = action_spec.get_base_input()
+
             if base_input_expr:
+                ctx_view = data_flow.ContextView(
+                    base_input_dict,
+                    self.task_ctx,
+                    self.wf_ctx
+                )
                 base_input_dict = expr.evaluate_recursively(
                     base_input_expr,
-                    base_input_dict
+                    ctx_view
                 )
             else:
                 base_input_dict = {}
@@ -378,7 +428,7 @@ class AdHocAction(PythonAction):
             transformer = adhoc_action_spec.get_output()
 
             if transformer is not None:
-                result = wf_utils.Result(
+                result = ml_actions.Result(
                     data=expr.evaluate_recursively(transformer, result.data),
                     error=result.error
                 )
@@ -404,18 +454,21 @@ class AdHocAction(PythonAction):
         An ad-hoc action may be based on another ad-hoc action (and this
         recursively). Using twice the same base action is not allowed to
         avoid infinite loops. It stores the list of ad-hoc actions.
+
         :param action_def: Action definition
         :type action_def: ActionDefinition
         :param base_action_def: Original base action definition
         :type base_action_def: ActionDefinition
-        :return; The definition of the base system action
-        :rtype; ActionDefinition
+        :return: The definition of the base system action
+        :rtype: ActionDefinition
         """
+
         self.adhoc_action_defs = [action_def]
         original_base_name = self.action_spec.get_name()
         action_names = set([original_base_name])
 
         base = base_action_def
+
         while not base.is_system and base.name not in action_names:
             action_names.add(base.name)
             self.adhoc_action_defs.append(base)
@@ -454,10 +507,11 @@ class WorkflowAction(Action):
 
         wf_spec_name = task_spec.get_workflow_name()
 
-        wf_def = e_utils.resolve_workflow_definition(
+        wf_def = engine_utils.resolve_workflow_definition(
             parent_wf_ex.workflow_name,
             parent_wf_spec.get_name(),
-            wf_spec_name
+            namespace=parent_wf_ex.params['namespace'],
+            wf_spec_name=wf_spec_name
         )
 
         wf_spec = spec_parser.get_workflow_spec_by_definition_id(
@@ -467,11 +521,13 @@ class WorkflowAction(Action):
 
         wf_params = {
             'task_execution_id': self.task_ex.id,
-            'index': index
+            'index': index,
+            'namespace': parent_wf_ex.params['namespace']
         }
 
         if 'env' in parent_wf_ex.params:
             wf_params['env'] = parent_wf_ex.params['env']
+            wf_params['evaluate_env'] = parent_wf_ex.params.get('evaluate_env')
 
         for k, v in list(input_dict.items()):
             if k not in wf_spec.get_input():
@@ -480,6 +536,7 @@ class WorkflowAction(Action):
 
         wf_handler.start_workflow(
             wf_def.id,
+            wf_def.namespace,
             input_dict,
             "sub-workflow execution",
             wf_params
@@ -508,6 +565,7 @@ def resolve_action_definition(action_spec_name, wf_name=None,
     :param wf_spec_name: Workflow name according to a spec.
     :return: Action definition (python or ad-hoc).
     """
+
     action_db = None
 
     if wf_name and wf_name != wf_spec_name:

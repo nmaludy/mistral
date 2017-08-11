@@ -47,9 +47,18 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            t_execs = wf_ex.task_executions
+
+        self._assert_single_item(t_execs, name='task1')
+        self._assert_single_item(t_execs, name='task2')
+        self._assert_single_item(t_execs, name='join_task')
 
     def test_full_join_without_errors(self):
         wf_text = """---
@@ -86,7 +95,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -139,7 +148,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -200,7 +209,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         def _num_of_tasks():
             return len(
@@ -281,7 +290,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -363,7 +372,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -440,7 +449,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -522,7 +531,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wfs_tasks_join_complex)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('main', {})
+        wf_ex = self.engine.start_workflow('main', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -587,7 +596,7 @@ class JoinEngineTest(base.EngineTestCase):
         wf_service.create_workflows(wf_text)
 
         # Start workflow.
-        wf_ex = self.engine.start_workflow('main', {})
+        wf_ex = self.engine.start_workflow('main', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -646,7 +655,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('main', {})
+        wf_ex = self.engine.start_workflow('main', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -700,7 +709,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('test-join', {})
+        wf_ex = self.engine.start_workflow('test-join', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -732,7 +741,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -776,7 +785,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -809,7 +818,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
 
@@ -842,11 +851,11 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
 
-        self.assertTrue(len(tasks) >= 2)
+        self.assertGreaterEqual(len(tasks), 2)
 
         task1 = self._assert_single_item(tasks, name='task1')
 
@@ -900,11 +909,11 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         tasks = db_api.get_task_executions(workflow_execution_id=wf_ex.id)
 
-        self.assertTrue(len(tasks) >= 2)
+        self.assertGreaterEqual(len(tasks), 2)
 
         task1 = self._assert_single_item(tasks, name='task1')
 
@@ -966,7 +975,7 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -1028,6 +1037,197 @@ class JoinEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_success(wf_ex.id)
+
+    def test_triggered_by_success(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          tasks:
+            join_task:
+              join: all
+
+            task1:
+              on-success: join_task
+
+            task2:
+              on-success: join_task
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', '', {})
+
+        self.await_workflow_success(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            t_execs = wf_ex.task_executions
+
+        task1 = self._assert_single_item(t_execs, name='task1')
+        task2 = self._assert_single_item(t_execs, name='task2')
+        join_task = self._assert_single_item(t_execs, name='join_task')
+
+        key = 'triggered_by'
+
+        self.assertIsNone(task1.runtime_context.get(key))
+        self.assertIsNone(task2.runtime_context.get(key))
+
+        self.assertIn(
+            {
+                "task_id": task1.id,
+                "event": "on-success"
+            },
+            join_task.runtime_context.get(key)
+        )
+        self.assertIn(
+            {
+                "task_id": task2.id,
+                "event": "on-success"
+            },
+            join_task.runtime_context.get(key)
+        )
+
+    def test_triggered_by_error(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          tasks:
+            task1:
+              on-success: join_task
+
+            task2:
+              action: std.fail
+              on-success: join_task
+
+            task3:
+              action: std.noop
+              on-error: join_task
+
+            join_task:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', '', {})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            t_execs = wf_ex.task_executions
+
+        task1 = self._assert_single_item(
+            t_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        task2 = self._assert_single_item(
+            t_execs,
+            name='task2',
+            state=states.ERROR
+        )
+        task3 = self._assert_single_item(
+            t_execs,
+            name='task3',
+            state=states.SUCCESS
+        )
+        join_task = self._assert_single_item(
+            t_execs,
+            name='join_task',
+            state=states.ERROR
+        )
+
+        key = 'triggered_by'
+
+        self.assertIsNone(task1.runtime_context.get(key))
+        self.assertIsNone(task2.runtime_context.get(key))
+        self.assertIsNone(task3.runtime_context.get(key))
+
+        self.assertIn(
+            {
+                "task_id": task2.id,
+                "event": "not triggered"
+            },
+            join_task.runtime_context.get(key)
+        )
+        self.assertIn(
+            {
+                "task_id": task3.id,
+                "event": "not triggered"
+            },
+            join_task.runtime_context.get(key)
+        )
+
+    def test_triggered_by_impossible_route(self):
+        wf_text = """---
+        version: '2.0'
+
+        wf:
+          type: direct
+
+          tasks:
+            task1:
+              on-success: join_task
+
+            task2:
+              action: std.fail
+              on-success: task3
+
+            task3:
+              action: std.noop
+              on-success: join_task
+
+            join_task:
+              join: all
+        """
+
+        wf_service.create_workflows(wf_text)
+
+        wf_ex = self.engine.start_workflow('wf', '', {})
+
+        self.await_workflow_error(wf_ex.id)
+
+        with db_api.transaction():
+            wf_ex = db_api.get_workflow_execution(wf_ex.id)
+
+            t_execs = wf_ex.task_executions
+
+        task1 = self._assert_single_item(
+            t_execs,
+            name='task1',
+            state=states.SUCCESS
+        )
+        task2 = self._assert_single_item(
+            t_execs,
+            name='task2',
+            state=states.ERROR
+        )
+        join_task = self._assert_single_item(
+            t_execs,
+            name='join_task',
+            state=states.ERROR
+        )
+
+        self.assertEqual(3, len(t_execs))
+
+        key = 'triggered_by'
+
+        self.assertIsNone(task1.runtime_context.get(key))
+        self.assertIsNone(task2.runtime_context.get(key))
+
+        # Note: in case if execution does not exist for a previous
+        # task we can't track it in "triggered_by" because we need
+        # to know its ID so we leave it blank.
+        self.assertFalse(join_task.runtime_context.get(key))

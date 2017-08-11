@@ -121,9 +121,13 @@ class WorkflowDefinition(Definition):
     """Contains info about workflow (including definition in Mistral DSL)."""
 
     __tablename__ = 'workflow_definitions_v2'
-
+    namespace = sa.Column(sa.String(255), nullable=True)
     __table_args__ = (
-        sa.UniqueConstraint('name', 'project_id'),
+        sa.UniqueConstraint(
+            'name',
+            'namespace',
+            'project_id'
+        ),
         sa.Index('%s_is_system' % __tablename__, 'is_system'),
         sa.Index('%s_project_id' % __tablename__, 'project_id'),
         sa.Index('%s_scope' % __tablename__, 'scope'),
@@ -162,6 +166,7 @@ class Execution(mb.MistralSecureModelBase):
     name = sa.Column(sa.String(255))
     description = sa.Column(sa.String(255), nullable=True)
     workflow_name = sa.Column(sa.String(255))
+    workflow_namespace = sa.Column(sa.String(255))
     workflow_id = sa.Column(sa.String(80))
     spec = sa.Column(st.JsonMediumDictType())
     state = sa.Column(sa.String(20))
@@ -256,9 +261,16 @@ class TaskExecution(Execution):
 for cls in utils.iter_subclasses(Execution):
     event.listen(
         # Catch and trim Execution.state_info to always fit allocated size.
+        # Note that the limit is 65500 which is less than 65535 (2^16 -1).
+        # The reason is that utils.cut() is not exactly accurate in case if
+        # the value is not a string, but, for example, a dictionary. If we
+        # limit it exactly to 65535 then once in a while it may go slightly
+        # beyond the allowed maximum size. It may depend on the order of
+        # keys in a string representation and other things that are hidden
+        # inside utils.cut_dict() method.
         cls.state_info,
         'set',
-        lambda t, v, o, i: utils.cut(v, 65532),
+        lambda t, v, o, i: utils.cut(v, 65500),
         retval=True
     )
 
@@ -367,7 +379,7 @@ class Environment(mb.MistralSecureModelBase):
     id = mb.id_column()
     name = sa.Column(sa.String(200))
     description = sa.Column(sa.Text())
-    variables = sa.Column(st.JsonDictType())
+    variables = sa.Column(st.JsonLongDictType())
 
 
 class CronTrigger(mb.MistralSecureModelBase):
@@ -425,8 +437,8 @@ class CronTrigger(mb.MistralSecureModelBase):
     def to_dict(self):
         d = super(CronTrigger, self).to_dict()
 
-        mb.datetime_to_str(d, 'first_execution_time')
-        mb.datetime_to_str(d, 'next_execution_time')
+        utils.datetime_to_str_in_dict(d, 'first_execution_time')
+        utils.datetime_to_str_in_dict(d, 'next_execution_time')
 
         return d
 
@@ -485,6 +497,7 @@ class EventTrigger(mb.MistralSecureModelBase):
         sa.String(36),
         sa.ForeignKey(WorkflowDefinition.id)
     )
+    workflow = relationship('WorkflowDefinition', lazy='joined')
     workflow_params = sa.Column(st.JsonDictType())
     workflow_input = sa.Column(st.JsonDictType())
 

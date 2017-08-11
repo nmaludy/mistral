@@ -14,13 +14,13 @@
 
 from oslo_config import cfg
 
-from mistral.actions import base as actions_base
 from mistral.db.v2 import api as db_api
 from mistral import exceptions as exc
 from mistral.services import workbooks as wb_service
 from mistral.services import workflows as wf_service
 from mistral.tests.unit.engine import base
 from mistral.workflow import states
+from mistral_lib import actions as actions_base
 
 
 # Use the set_default method to set value otherwise in certain test cases
@@ -32,7 +32,7 @@ class InvalidUnicodeAction(actions_base.Action):
     def __init__(self):
         pass
 
-    def run(self):
+    def run(self, context):
         return b'\xf8'
 
     def test(self):
@@ -62,6 +62,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
             exc.InputException,
             self.engine.start_workflow,
             'wf',
+            '',
             {'wrong_param': 'some_value'}
         )
 
@@ -87,7 +88,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.assertEqual(states.RUNNING, wf_ex.state)
         self.assertIsNotNone(db_api.get_workflow_execution(wf_ex.id))
@@ -118,7 +119,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -148,7 +149,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -206,7 +207,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -257,7 +258,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -309,7 +310,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -357,7 +358,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -398,7 +399,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -410,7 +411,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
         state_info = task_ex.state_info
 
         self.assertIsNotNone(state_info)
-        self.assertTrue(state_info.find('error') < state_info.find('data'))
+        self.assertLess(state_info.find('error'), state_info.find('data'))
 
     def test_error_message_format_unknown_function(self):
         wf_text = """
@@ -426,7 +427,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -453,7 +454,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -481,7 +482,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -510,7 +511,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -545,7 +546,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -584,7 +585,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wb_service.create_workbook_v2(wb_text)
 
-        wf_ex = self.engine.start_workflow('wb.wf', {})
+        wf_ex = self.engine.start_workflow('wb.wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -620,7 +621,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -656,7 +657,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -687,7 +688,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 
@@ -727,7 +728,7 @@ class ErrorHandlingEngineTest(base.EngineTestCase):
 
         wf_service.create_workflows(wf_text)
 
-        wf_ex = self.engine.start_workflow('wf', {})
+        wf_ex = self.engine.start_workflow('wf', '', {})
 
         self.await_workflow_error(wf_ex.id)
 

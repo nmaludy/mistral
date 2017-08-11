@@ -1,4 +1,5 @@
 # Copyright 2014 - Mirantis, Inc.
+# Copyright 2017 - Brocade Communications Systems, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -27,13 +28,14 @@ class Engine(object):
     """Engine interface."""
 
     @abc.abstractmethod
-    def start_workflow(self, wf_identifier, wf_input, description='',
-                       **params):
+    def start_workflow(self, wf_identifier, wf_namespace='', wf_input=None,
+                       description='', **params):
         """Starts the specified workflow.
 
         :param wf_identifier: Workflow ID or name. Workflow ID is recommended,
             workflow name will be deprecated since Mitaka.
         :param wf_input: Workflow input data as a dictionary.
+        :param wf_namespace: Workflow input data as a dictionary.
         :param description: Execution description.
         :param params: Additional workflow type specific parameters.
         :return: Workflow execution object.
@@ -129,39 +131,6 @@ class Engine(object):
 
 
 @six.add_metaclass(abc.ABCMeta)
-class Executor(object):
-    """Action executor interface."""
-
-    @abc.abstractmethod
-    def run_action(self, action_ex_id, action_class_str, attributes,
-                   action_params, safe_rerun, redelivered=False):
-        """Runs action.
-
-        :param action_ex_id: Corresponding action execution id.
-        :param action_class_str: Path to action class in dot notation.
-        :param attributes: Attributes of action class which will be set to.
-        :param action_params: Action parameters.
-        :param safe_rerun: Tells if given action can be safely rerun.
-        :param redelivered: Tells if given action was run before on another
-            executor.
-        """
-        raise NotImplementedError()
-
-
-@six.add_metaclass(abc.ABCMeta)
-class EventEngine(object):
-    """Action event trigger interface."""
-
-    @abc.abstractmethod
-    def create_event_trigger(self, trigger, events):
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def delete_event_trigger(self, trigger, events):
-        raise NotImplementedError()
-
-
-@six.add_metaclass(abc.ABCMeta)
 class TaskPolicy(object):
     """Task policy.
 
@@ -217,5 +186,5 @@ class TaskPolicy(object):
             raise exc.InvalidModelException(
                 "Invalid data type in %s: %s. Value(s) can be shown after "
                 "YAQL evaluating. If you use YAQL here, please correct it."
-                % (self.__class__.__name__, e.message)
+                % (self.__class__.__name__, str(e))
             )

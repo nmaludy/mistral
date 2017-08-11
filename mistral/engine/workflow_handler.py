@@ -32,12 +32,17 @@ _CHECK_AND_COMPLETE_PATH = (
 )
 
 
-@profiler.trace('workflow-handler-start-workflow')
-def start_workflow(wf_identifier, wf_input, desc, params):
+@profiler.trace('workflow-handler-start-workflow', hide_args=True)
+def start_workflow(wf_identifier, wf_namespace, wf_input, desc, params):
     wf = workflows.Workflow()
 
+    wf_def = db_api.get_workflow_definition(wf_identifier, wf_namespace)
+
+    if 'namespace' not in params:
+        params['namespace'] = wf_def.namespace
+
     wf.start(
-        wf_def=db_api.get_workflow_definition(wf_identifier),
+        wf_def=wf_def,
         input_dict=wf_input,
         desc=desc,
         params=params
@@ -77,7 +82,7 @@ def cancel_workflow(wf_ex, msg=None):
     stop_workflow(wf_ex, states.CANCELLED, msg)
 
 
-@profiler.trace('workflow-handler-check-and-complete')
+@profiler.trace('workflow-handler-check-and-complete', hide_args=True)
 def _check_and_complete(wf_ex_id):
     # Note: This method can only be called via scheduler.
     with db_api.transaction():
@@ -92,8 +97,8 @@ def _check_and_complete(wf_ex_id):
             incomplete_tasks_count = wf.check_and_complete()
         except exc.MistralException as e:
             msg = (
-                "Failed to check and complete [wf_ex=%s]:"
-                " %s\n%s" % (wf_ex, e, tb.format_exc())
+                "Failed to check and complete [wf_ex_id=%s, wf_name=%s]:"
+                " %s\n%s" % (wf_ex_id, wf_ex.name, e, tb.format_exc())
             )
 
             LOG.error(msg)
@@ -118,9 +123,21 @@ def _check_and_complete(wf_ex_id):
 
 
 def pause_workflow(wf_ex, msg=None):
-    wf = workflows.Workflow(wf_ex=wf_ex)
+    # Pause subworkflows first.
+    for task_ex in wf_ex.task_executions:
+        sub_wf_exs = db_api.get_workflow_executions(
+            task_execution_id=task_ex.id
+        )
 
-    wf.set_state(states.PAUSED, msg)
+        for sub_wf_ex in sub_wf_exs:
+            if not states.is_completed(sub_wf_ex.state):
+                pause_workflow(sub_wf_ex, msg=msg)
+
+    # If all subworkflows paused successfully, pause the main workflow.
+    # If any subworkflows failed to pause for temporary reason, this
+    # allows pause to be executed again on the main workflow.
+    wf = workflows.Workflow(wf_ex=wf_ex)
+    wf.pause(msg=msg)
 
 
 def rerun_workflow(wf_ex, task_ex, reset=True, env=None):
@@ -141,12 +158,23 @@ def resume_workflow(wf_ex, env=None):
     if not states.is_paused_or_idle(wf_ex.state):
         return wf_ex.get_clone()
 
-    wf = workflows.Workflow(wf_ex=wf_ex)
+    # Resume subworkflows first.
+    for task_ex in wf_ex.task_executions:
+        sub_wf_exs = db_api.get_workflow_executions(
+            task_execution_id=task_ex.id
+        )
 
+        for sub_wf_ex in sub_wf_exs:
+            if not states.is_completed(sub_wf_ex.state):
+                resume_workflow(sub_wf_ex)
+
+    # Resume current workflow here so to trigger continue workflow only
+    # after all other subworkflows are placed back in running state.
+    wf = workflows.Workflow(wf_ex=wf_ex)
     wf.resume(env=env)
 
 
-@profiler.trace('workflow-handler-set-state')
+@profiler.trace('workflow-handler-set-state', hide_args=True)
 def set_workflow_state(wf_ex, state, msg=None):
     if states.is_completed(state):
         stop_workflow(wf_ex, state, msg)
@@ -154,7 +182,8 @@ def set_workflow_state(wf_ex, state, msg=None):
         pause_workflow(wf_ex, msg)
     else:
         raise exc.MistralError(
-            'Invalid workflow state [wf_ex=%s, state=%s]' % (wf_ex, state)
+            'Invalid workflow execution state [wf_ex_id=%s, wf_name=%s, '
+            'state=%s]' % (wf_ex.id, wf_ex.name, state)
         )
 
 
@@ -162,7 +191,7 @@ def _get_completion_check_key(wf_ex):
     return 'wfh_on_c_a_c-%s' % wf_ex.id
 
 
-@profiler.trace('workflow-handler-schedule-check-and-complete')
+@profiler.trace('workflow-handler-schedule-check-and-complete', hide_args=True)
 def _schedule_check_and_complete(wf_ex, delay=0):
     """Schedules workflow completion check.
 

@@ -20,8 +20,8 @@ import mock
 
 from mistral.db.v2 import api as db_api
 from mistral.db.v2.sqlalchemy import models
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import clients as rpc
 from mistral.tests.unit.api import base
 from mistral.workflow import data_flow
 from mistral.workflow import states
@@ -30,6 +30,14 @@ from mistral.workflow import states
 
 RESULT = {"some": "result"}
 PUBLISHED = {"var": "val"}
+RUNTIME_CONTEXT = {
+    'triggered_by': [
+        {
+            'task_id': '123-123-123',
+            'event': 'on-success'
+        }
+    ]
+}
 
 WF_EX = models.WorkflowExecution(
     id='abc',
@@ -59,7 +67,7 @@ TASK_EX = models.TaskExecution(
     state=states.RUNNING,
     tags=['a', 'b'],
     in_context={},
-    runtime_context={},
+    runtime_context=RUNTIME_CONTEXT,
     workflow_execution_id=WF_EX.id,
     created_at=datetime.datetime(1970, 1, 1),
     updated_at=datetime.datetime(1970, 1, 1),
@@ -82,7 +90,7 @@ WITH_ITEMS_TASK_EX = models.TaskExecution(
     state=states.RUNNING,
     tags=['a', 'b'],
     in_context={},
-    runtime_context={},
+    runtime_context=RUNTIME_CONTEXT,
     workflow_execution_id=WF_EX.id,
     created_at=datetime.datetime(1970, 1, 1),
     updated_at=datetime.datetime(1970, 1, 1),
@@ -101,6 +109,7 @@ TASK = {
     'updated_at': '1970-01-01 00:00:00',
     'result': json.dumps(RESULT),
     'published': json.dumps(PUBLISHED),
+    'runtime_context': json.dumps(RUNTIME_CONTEXT),
     'processed': True
 }
 

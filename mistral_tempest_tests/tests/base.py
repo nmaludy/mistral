@@ -48,9 +48,9 @@ class TestCase(test.BaseTestCase):
             cls.mgr.auth_provider = service_base.AuthProv()
             cls.admin_mgr = cls.alt_mgr = cls.mgr
         else:
-            cls.admin_mgr = cls.admin_manager
-            cls.mgr = cls.manager
-            cls.alt_mgr = cls.alt_manager
+            cls.admin_mgr = cls.os_admin
+            cls.mgr = cls.os_primary
+            cls.alt_mgr = cls.os_alt
 
         if cls._service == 'workflowv2':
             cls.admin_client = mistral_client.MistralClientV2(
@@ -59,9 +59,6 @@ class TestCase(test.BaseTestCase):
                 cls.mgr.auth_provider, cls._service)
             cls.alt_client = mistral_client.MistralClientV2(
                 cls.alt_mgr.auth_provider, cls._service)
-
-    def setUp(self):
-        super(TestCase, self).setUp()
 
     def tearDown(self):
         super(TestCase, self).tearDown()

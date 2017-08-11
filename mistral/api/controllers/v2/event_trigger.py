@@ -37,20 +37,20 @@ class EventTriggersController(rest.RestController):
     @wsme_pecan.wsexpose(resources.EventTrigger, types.uuid)
     def get(self, id):
         """Returns the specified event_trigger."""
-        acl.enforce('event_trigger:get', auth_ctx.ctx())
+        acl.enforce('event_triggers:get', auth_ctx.ctx())
 
         LOG.info('Fetch event trigger [id=%s]', id)
 
         db_model = db_api.get_event_trigger(id)
 
-        return resources.EventTrigger.from_dict(db_model.to_dict())
+        return resources.EventTrigger.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.EventTrigger, body=resources.EventTrigger,
                          status_code=201)
     def post(self, event_trigger):
         """Creates a new event trigger."""
-        acl.enforce('event_trigger:create', auth_ctx.ctx())
+        acl.enforce('event_triggers:create', auth_ctx.ctx())
 
         values = event_trigger.to_dict()
         input_keys = [k for k in values if values[k]]
@@ -61,6 +61,9 @@ class EventTriggersController(rest.RestController):
                 CREATE_MANDATORY
             )
 
+        if values.get('scope') == 'public':
+            acl.enforce('event_triggers:create:public', auth_ctx.ctx())
+
         LOG.info('Create event trigger: %s', values)
 
         db_model = triggers.create_event_trigger(
@@ -69,11 +72,12 @@ class EventTriggersController(rest.RestController):
             values.get('topic'),
             values.get('event'),
             values.get('workflow_id'),
+            values.get('scope'),
             workflow_input=values.get('workflow_input'),
             workflow_params=values.get('workflow_params'),
         )
 
-        return resources.EventTrigger.from_dict(db_model.to_dict())
+        return resources.EventTrigger.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.EventTrigger, types.uuid,
@@ -85,12 +89,12 @@ class EventTriggersController(rest.RestController):
         change them is to delete the event trigger first, then create a new
         event trigger with new params.
         """
-        acl.enforce('event_trigger:update', auth_ctx.ctx())
+        acl.enforce('event_triggers:update', auth_ctx.ctx())
 
         values = event_trigger.to_dict()
 
         for field in UPDATE_NOT_ALLOWED:
-            if values.get(field, None):
+            if values.get(field):
                 raise exc.EventTriggerException(
                     "Can not update fields %s of event trigger." %
                     UPDATE_NOT_ALLOWED
@@ -103,13 +107,13 @@ class EventTriggersController(rest.RestController):
 
             db_model = triggers.update_event_trigger(id, values)
 
-        return resources.EventTrigger.from_dict(db_model.to_dict())
+        return resources.EventTrigger.from_db_model(db_model)
 
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
     def delete(self, id):
         """Delete event trigger."""
-        acl.enforce('event_trigger:delete', auth_ctx.ctx())
+        acl.enforce('event_triggers:delete', auth_ctx.ctx())
 
         LOG.info("Delete event trigger [id=%s]", id)
 
@@ -121,15 +125,20 @@ class EventTriggersController(rest.RestController):
     @rest_utils.wrap_wsme_controller_exception
     @wsme_pecan.wsexpose(resources.EventTriggers, types.uuid, int,
                          types.uniquelist, types.list, types.uniquelist,
-                         types.jsontype)
+                         bool, types.jsontype)
     def get_all(self, marker=None, limit=None, sort_keys='created_at',
-                sort_dirs='asc', fields='', **filters):
+                sort_dirs='asc', fields='', all_projects=False, **filters):
         """Return all event triggers."""
-        acl.enforce('event_trigger:list', auth_ctx.ctx())
+        acl.enforce('event_triggers:list', auth_ctx.ctx())
 
-        LOG.info("Fetch event triggers. marker=%s, limit=%s, sort_keys=%s, "
-                 "sort_dirs=%s, fields=%s, filters=%s", marker, limit,
-                 sort_keys, sort_dirs, fields, filters)
+        if all_projects:
+            acl.enforce('event_triggers:list:all_projects', auth_ctx.ctx())
+
+        LOG.info(
+            "Fetch event triggers. marker=%s, limit=%s, sort_keys=%s, "
+            "sort_dirs=%s, fields=%s, all_projects=%s, filters=%s", marker,
+            limit, sort_keys, sort_dirs, fields, all_projects, filters
+        )
 
         return rest_utils.get_all(
             resources.EventTriggers,
@@ -142,5 +151,6 @@ class EventTriggersController(rest.RestController):
             sort_keys=sort_keys,
             sort_dirs=sort_dirs,
             fields=fields,
+            all_projects=all_projects,
             **filters
         )

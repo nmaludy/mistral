@@ -114,17 +114,17 @@ def delete_workbooks(**kwargs):
 
 # Workflow definitions.
 
-def get_workflow_definition(identifier):
-    return IMPL.get_workflow_definition(identifier)
+def get_workflow_definition(identifier, namespace=''):
+    return IMPL.get_workflow_definition(identifier, namespace=namespace)
 
 
 def get_workflow_definition_by_id(id):
     return IMPL.get_workflow_definition_by_id(id)
 
 
-def load_workflow_definition(name):
+def load_workflow_definition(name, namespace=''):
     """Unlike get_workflow_definition this method is allowed to return None."""
-    return IMPL.load_workflow_definition(name)
+    return IMPL.load_workflow_definition(name, namespace)
 
 
 def get_workflow_definitions(limit=None, marker=None, sort_keys=None,
@@ -143,16 +143,16 @@ def create_workflow_definition(values):
     return IMPL.create_workflow_definition(values)
 
 
-def update_workflow_definition(identifier, values):
-    return IMPL.update_workflow_definition(identifier, values)
+def update_workflow_definition(identifier, values, namespace):
+    return IMPL.update_workflow_definition(identifier, values, namespace)
 
 
 def create_or_update_workflow_definition(name, values):
     return IMPL.create_or_update_workflow_definition(name, values)
 
 
-def delete_workflow_definition(identifier):
-    IMPL.delete_workflow_definition(identifier)
+def delete_workflow_definition(identifier, namespace=''):
+    IMPL.delete_workflow_definition(identifier, namespace)
 
 
 def delete_workflow_definitions(**kwargs):
@@ -393,8 +393,14 @@ def get_next_cron_triggers(time):
     return IMPL.get_next_cron_triggers(time)
 
 
-def get_expired_executions(time):
-    return IMPL.get_expired_executions(time)
+def get_executions_to_clean(expiration_time, limit=None,
+                            max_finished_executions=None, columns=()):
+    return IMPL.get_executions_to_clean(
+        expiration_time,
+        limit,
+        max_finished_executions,
+        columns
+    )
 
 
 def create_cron_trigger(values):
@@ -498,10 +504,14 @@ def get_event_trigger(id, insecure=False):
     return IMPL.get_event_trigger(id, insecure)
 
 
+def load_event_trigger(id, insecure=False):
+    return IMPL.load_event_trigger(id, insecure)
+
+
 def get_event_triggers(insecure=False, limit=None, marker=None, sort_keys=None,
                        sort_dirs=None, fields=None, **kwargs):
     return IMPL.get_event_triggers(
-        insecure=False,
+        insecure=insecure,
         limit=limit,
         marker=marker,
         sort_keys=sort_keys,

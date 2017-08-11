@@ -18,8 +18,8 @@ import mock
 
 from oslo_config import cfg
 
-from mistral.engine.rpc_backend import rpc
 from mistral import exceptions as exc
+from mistral.rpc import clients as rpc
 from mistral.services import periodic
 from mistral.services import security
 from mistral.services import triggers as t_s
@@ -183,8 +183,8 @@ class TriggerServiceV2Test(base.DbTestCase):
             datetime.datetime(2010, 8, 25)
         )
 
-        self.assertIn('Invalid input', exception.message)
-        self.assertIn('some_wf', exception.message)
+        self.assertIn('Invalid input', str(exception))
+        self.assertIn('some_wf', str(exception))
 
     def test_oneshot_trigger_create(self):
         trigger = t_s.create_cron_trigger(
@@ -224,6 +224,39 @@ class TriggerServiceV2Test(base.DbTestCase):
         )
 
         self.assertEqual('my_trust_id', trigger.trust_id)
+
+    @mock.patch.object(security, 'create_trust',
+                       type('trust', (object,), {'id': 'my_trust_id'}))
+    @mock.patch.object(security, 'create_context')
+    @mock.patch.object(rpc.EngineClient, 'start_workflow', mock.Mock())
+    @mock.patch(
+        'mistral.services.periodic.advance_cron_trigger',
+        mock.MagicMock(side_effect=new_advance_cron_trigger)
+    )
+    @mock.patch.object(security, 'delete_trust')
+    def test_create_delete_trust_in_trigger(self, delete_trust, create_ctx):
+        create_ctx.return_value = self.ctx
+        cfg.CONF.set_default('auth_enable', True, group='pecan')
+        trigger_thread = periodic.setup()
+        self.addCleanup(trigger_thread.stop)
+        self.addCleanup(
+            cfg.CONF.set_default, 'auth_enable',
+            False, group='pecan'
+        )
+
+        t_s.create_cron_trigger(
+            'trigger-%s' % utils.generate_unicode_uuid(),
+            self.wf.name,
+            {},
+            {},
+            '* * * * * *',
+            None,
+            1,
+            datetime.datetime(2010, 8, 25)
+        )
+
+        eventlet.sleep(1)
+        self.assertEqual(0, delete_trust.call_count)
 
     def test_get_trigger_in_correct_orders(self):
         t1_name = 'trigger-%s' % utils.generate_unicode_uuid()
