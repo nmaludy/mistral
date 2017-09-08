@@ -27,8 +27,8 @@ from mistral.utils import expression_utils
 
 LOG = logging.getLogger(__name__)
 
-JINJA_REGEXP = '({{(.*)}})'
-JINJA_BLOCK_REGEXP = '({%(.*)%})'
+JINJA_REGEXP = '({{(.*?)}})'
+JINJA_BLOCK_REGEXP = '({%(.*?)%})'
 
 _environment = SandboxedEnvironment(
     undefined=jinja2.StrictUndefined,
