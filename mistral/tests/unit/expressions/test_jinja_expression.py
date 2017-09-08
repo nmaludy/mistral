@@ -403,7 +403,7 @@ class InlineJinjaEvaluatorTest(base.BaseTest):
         self.assertEqual('33', self._evaluator.evaluate('{{ _ }}{{ _ }}', 3))
 
     def test_multiple_expressions(self):
-        context = {'dir': '/tmp/',
+        context = {'dir': '/tmp',
                    'file': 'a.txt'}
         expected_result = '/tmp/a.txt'
         result = self._evaluator.evaluate('{{ _.dir }}/{{ _.file }}', context)
